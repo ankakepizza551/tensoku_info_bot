@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.env
+.venv
+venv/
+ENV/
+
+# Database & Logs (Railway volumes will hold this, we shouldn't push local ones)
+data/
+*.db
+*.log
