@@ -6,13 +6,14 @@ import config
 DB_PATH = config.DB_PATH
 
 async def init_db():
-    """データベースの初期化"""
+    """データベースの初期化とマイグレーション"""
     async with aiosqlite.connect(DB_PATH) as db:
         # ユーザーテーブル
         await db.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
                 username TEXT NOT NULL,
+                rating REAL DEFAULT 1500.0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -28,11 +29,30 @@ async def init_db():
                 char1 TEXT,                         -- プレイヤー1の使用キャラ
                 char2 TEXT,                         -- プレイヤー2の使用キャラ
                 is_confirmed INTEGER DEFAULT 1,     -- 承認状態 (1: 確定, 0: 未承認)
+                rating_change1 REAL DEFAULT 0.0,    -- プレイヤー1のレート変動量
+                rating_change2 REAL DEFAULT 0.0,    -- プレイヤー2のレート変動量
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(player1_id) REFERENCES users(user_id),
                 FOREIGN KEY(player2_id) REFERENCES users(user_id)
             )
         """)
+        await db.commit()
+
+        # --- 既存データベースへのマイグレーション処理 ---
+        # users テーブルに rating カラムが存在しない場合は追加
+        async with db.execute("PRAGMA table_info(users)") as cursor:
+            columns = [row[1] for row in await cursor.fetchall()]
+        if "rating" not in columns:
+            await db.execute("ALTER TABLE users ADD COLUMN rating REAL DEFAULT 1500.0")
+            await db.commit()
+
+        # matches テーブルに rating_change1, rating_change2 が存在しない場合は追加
+        async with db.execute("PRAGMA table_info(matches)") as cursor:
+            columns = [row[1] for row in await cursor.fetchall()]
+        if "rating_change1" not in columns:
+            await db.execute("ALTER TABLE matches ADD COLUMN rating_change1 REAL DEFAULT 0.0")
+        if "rating_change2" not in columns:
+            await db.execute("ALTER TABLE matches ADD COLUMN rating_change2 REAL DEFAULT 0.0")
         await db.commit()
 
 async def get_or_create_user(user_id: int, username: str):
@@ -60,30 +80,89 @@ async def get_or_create_user(user_id: int, username: str):
 
 async def add_match(reporter_id: int, player1_id: int, player1_name: str,
                     player2_id: int, player2_name: str,
-                    score1: int, score2: int, char1: str = None, char2: str = None) -> int:
-    """戦績をデータベースに登録し、新規追加された match_id を返す"""
+                    score1: int, score2: int, char1: str = None, char2: str = None) -> dict:
+    """戦績をデータベースに登録し、Eloレーティング計算・更新を行って結果を返す"""
     # 双方のユーザーをDBに作成/更新
-    await get_or_create_user(player1_id, player1_name)
-    await get_or_create_user(player2_id, player2_name)
+    p1 = await get_or_create_user(player1_id, player1_name)
+    p2 = await get_or_create_user(player2_id, player2_name)
+    
+    old_r1 = p1["rating"]
+    old_r2 = p2["rating"]
+    
+    # Eloレーティング期待値の計算
+    expected1 = 1.0 / (1.0 + 10.0 ** ((old_r2 - old_r1) / 400.0))
+    expected2 = 1.0 / (1.0 + 10.0 ** ((old_r1 - old_r2) / 400.0))
+    
+    # 勝敗判定 (S1, S2)
+    if score1 > score2:
+        s1, s2 = 1.0, 0.0
+    elif score2 > score1:
+        s1, s2 = 0.0, 1.0
+    else:
+        s1, s2 = 0.5, 0.5
+        
+    k_factor = 32.0
+    change1 = k_factor * (s1 - expected1)
+    change2 = k_factor * (s2 - expected2)
+    
+    new_r1 = old_r1 + change1
+    new_r2 = old_r2 + change2
     
     async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute("""
-            INSERT INTO matches (reporter_id, player1_id, player2_id, score1, score2, char1, char2)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (reporter_id, player1_id, player2_id, score1, score2, char1, char2))
-        await db.commit()
-        return cursor.lastrowid
+        # トランザクション処理
+        await db.execute("BEGIN TRANSACTION")
+        try:
+            cursor = await db.execute("""
+                INSERT INTO matches (reporter_id, player1_id, player2_id, score1, score2, char1, char2, rating_change1, rating_change2)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (reporter_id, player1_id, player2_id, score1, score2, char1, char2, change1, change2))
+            match_id = cursor.lastrowid
+            
+            # ユーザーのレーティング更新
+            await db.execute("UPDATE users SET rating = ? WHERE user_id = ?", (new_r1, player1_id))
+            await db.execute("UPDATE users SET rating = ? WHERE user_id = ?", (new_r2, player2_id))
+            await db.commit()
+        except Exception as e:
+            await db.execute("ROLLBACK")
+            raise e
+            
+    return {
+        "match_id": match_id,
+        "old_rating1": old_r1,
+        "new_rating1": new_r1,
+        "change1": change1,
+        "old_rating2": old_r2,
+        "new_rating2": new_r2,
+        "change2": change2
+    }
 
 async def delete_match(match_id: int) -> bool:
-    """指定されたIDの戦績を削除。削除成功ならTrueを返す"""
+    """指定されたIDの戦績を削除し、レーティング変動を巻き戻す。削除成功ならTrueを返す"""
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT 1 FROM matches WHERE match_id = ?", (match_id,)) as cursor:
-            exists = await cursor.fetchone()
-        if not exists:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM matches WHERE match_id = ?", (match_id,)) as cursor:
+            match_data = await cursor.fetchone()
+        if not match_data:
             return False
             
-        await db.execute("DELETE FROM matches WHERE match_id = ?", (match_id,))
-        await db.commit()
+        p1_id = match_data["player1_id"]
+        p2_id = match_data["player2_id"]
+        change1 = match_data["rating_change1"] or 0.0
+        change2 = match_data["rating_change2"] or 0.0
+        
+        await db.execute("BEGIN TRANSACTION")
+        try:
+            # マッチの削除
+            await db.execute("DELETE FROM matches WHERE match_id = ?", (match_id,))
+            
+            # レーティングの巻き戻し (引く)
+            await db.execute("UPDATE users SET rating = rating - ? WHERE user_id = ?", (change1, p1_id))
+            await db.execute("UPDATE users SET rating = rating - ? WHERE user_id = ?", (change2, p2_id))
+            await db.commit()
+        except Exception as e:
+            await db.execute("ROLLBACK")
+            raise e
+            
         return True
 
 async def get_match(match_id: int):
@@ -210,6 +289,7 @@ async def get_leaderboard(min_matches: int = 1) -> list:
         for user in users:
             uid = user["user_id"]
             uname = user["username"]
+            urating = user["rating"] if "rating" in user.keys() else 1500.0
             
             # 各ユーザーの戦績を簡易集集計する
             async with db.execute("""
@@ -234,9 +314,10 @@ async def get_leaderboard(min_matches: int = 1) -> list:
                     "wins": wins,
                     "losses": losses,
                     "total": total,
-                    "win_rate": round(win_rate, 1)
+                    "win_rate": round(win_rate, 1),
+                    "rating": round(urating, 1)
                 })
                 
-        # 勝率で降順ソート、同率なら勝利数でソート
-        leaderboard_data.sort(key=lambda x: (x["win_rate"], x["wins"]), reverse=True)
+        # レーティング（Elo）で降順ソート、同率なら勝率でソート
+        leaderboard_data.sort(key=lambda x: (x["rating"], x["win_rate"]), reverse=True)
         return leaderboard_data

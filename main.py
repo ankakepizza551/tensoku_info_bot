@@ -20,7 +20,8 @@ logger = logging.getLogger("TensokuMatchBot")
 # ロードするCogの定義
 COGS = [
     "cogs.report_cog",
-    "cogs.stats_cog"
+    "cogs.stats_cog",
+    "cogs.recruit_cog"
 ]
 
 # インテントの設定
@@ -42,16 +43,30 @@ async def on_ready():
 
 @bot.command(name="sync")
 @commands.is_owner()
-async def sync(ctx):
-    """スラッシュコマンドを同期します (Botのオーナーのみ実行可能)"""
-    await ctx.send("スラッシュコマンドを同期中...")
-    try:
-        synced = await bot.tree.sync()
-        await ctx.send(f"✅ スラッシュコマンドを {len(synced)} 件同期しました！")
-        logger.info(f"コマンド同期完了: {len(synced)} 件")
-    except Exception as e:
-        await ctx.send(f"❌ 同期中にエラーが発生しました: {e}")
-        logger.error(f"コマンド同期失敗: {e}")
+async def sync(ctx, target: str = None):
+    """スラッシュコマンドを同期します (Botのオーナーのみ実行可能)
+    引数なし: グローバル同期 (反映まで最大1時間)
+    guild: このサーバーのみに即時同期
+    """
+    if target == "guild":
+        await ctx.send("このサーバー限定でスラッシュコマンドを同期中... (即時反映)")
+        try:
+            bot.tree.copy_global_to(guild=ctx.guild)
+            synced = await bot.tree.sync(guild=ctx.guild)
+            await ctx.send(f"✅ このサーバーに {len(synced)} 件のスラッシュコマンドを即時同期しました！")
+            logger.info(f"ギルド同期完了: {len(synced)} 件")
+        except Exception as e:
+            await ctx.send(f"❌ 同期中にエラーが発生しました: {e}")
+            logger.error(f"ギルド同期失敗: {e}")
+    else:
+        await ctx.send("グローバル（全サーバー）にスラッシュコマンドを同期中... (反映まで時間がかかる場合があります)")
+        try:
+            synced = await bot.tree.sync()
+            await ctx.send(f"✅ グローバルで {len(synced)} 件のスラッシュコマンドを同期しました！")
+            logger.info(f"グローバル同期完了: {len(synced)} 件")
+        except Exception as e:
+            await ctx.send(f"❌ 同期中にエラーが発生しました: {e}")
+            logger.error(f"グローバル同期失敗: {e}")
 
 @bot.command(name="bot_status")
 async def bot_status(ctx):

@@ -60,7 +60,7 @@ class ReportCog(commands.Cog):
         
         # データベースに登録
         try:
-            match_id = await db_manager.add_match(
+            result = await db_manager.add_match(
                 reporter_id=player1_id,
                 player1_id=player1_id,
                 player1_name=player1_name,
@@ -71,6 +71,7 @@ class ReportCog(commands.Cog):
                 char1=my_char,
                 char2=opponent_char
             )
+            match_id = result["match_id"]
             
             # 結果表示用Embedの作成
             embed = discord.Embed(
@@ -93,14 +94,25 @@ class ReportCog(commands.Cog):
             char1_display = f" ({my_char})" if my_char else ""
             char2_display = f" ({opponent_char})" if opponent_char else ""
             
+            sign1 = "+" if result["change1"] >= 0 else ""
+            sign2 = "+" if result["change2"] >= 0 else ""
+            
             embed.add_field(
                 name=player1_name,
-                value=f"使用キャラ: `{my_char or '未設定'}`\n獲得本数: **{my_score}**",
+                value=(
+                    f"使用キャラ: `{my_char or '未設定'}`\n"
+                    f"獲得本数: **{my_score}**\n"
+                    f"レート: `{round(result['old_rating1'], 1)}` ➔ `{round(result['new_rating1'], 1)}` ({sign1}{round(result['change1'], 1)})"
+                ),
                 inline=True
             )
             embed.add_field(
                 name=player2_name,
-                value=f"使用キャラ: `{opponent_char or '未設定'}`\n獲得本数: **{opponent_score}**",
+                value=(
+                    f"使用キャラ: `{opponent_char or '未設定'}`\n"
+                    f"獲得本数: **{opponent_score}**\n"
+                    f"レート: `{round(result['old_rating2'], 1)}` ➔ `{round(result['new_rating2'], 1)}` ({sign2}{round(result['change2'], 1)})"
+                ),
                 inline=True
             )
             
@@ -136,7 +148,7 @@ class ReportCog(commands.Cog):
                 # 削除完了Embed
                 embed = discord.Embed(
                     title="🗑️ 戦績削除完了",
-                    description=f"対戦ID `{match_id}` の戦績をデータベースから削除しました。",
+                    description=f"対戦ID `{match_id}` の戦績を削除し、この対戦によるレーティング変動を巻き戻しました。",
                     color=discord.Color.from_rgb(231, 76, 60) # 赤色
                 )
                 

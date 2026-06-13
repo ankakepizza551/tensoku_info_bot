@@ -44,6 +44,7 @@ class StatsCog(commands.Cog):
             wins = stats_data["wins"]
             losses = stats_data["losses"]
             total = stats_data["total_matches"]
+            user_rating = user_info["rating"] if "rating" in user_info.keys() else 1500.0
             
             # ビジュアルゲージの作成 (10文字分)
             bar_length = 10
@@ -53,7 +54,8 @@ class StatsCog(commands.Cog):
             
             embed.add_field(
                 name="総合戦績",
-                value=f"**総対戦数:** `{total}` 戦\n"
+                value=f"**レーティング:** `{round(user_rating, 1)}` (初期値: 1500)\n"
+                      f"**総対戦数:** `{total}` 戦\n"
                       f"**勝敗数:** `{wins}` 勝 `{losses}` 敗\n"
                       f"**勝率:** `{win_rate}%`\n"
                       f"**ゲージ:** {gauge}",
@@ -124,7 +126,7 @@ class StatsCog(commands.Cog):
                 
             embed = discord.Embed(
                 title="🏆 サーバー戦績リーダーボード",
-                description=f"対戦数の多い順・勝率順に並んでいます (最低対戦数: `{min_matches}` 戦)",
+                description=f"レーティング（強さの数値）順に並んでいます (最低対戦数: `{min_matches}` 戦)",
                 color=discord.Color.from_rgb(241, 196, 15)
             )
             
@@ -142,7 +144,7 @@ class StatsCog(commands.Cog):
                     
                 leaderboard_text += (
                     f"{rank_emoji} **{p['username']}** : "
-                    f"`{p['win_rate']}%` ({p['wins']}勝-{p['losses']}敗 / 総数 {p['total']})\n"
+                    f"レート `{p['rating']}` (勝率 `{p['win_rate']}%` / `{p['wins']}勝-{p['losses']}敗 / 総数 {p['total']})\n"
                 )
                 
             embed.add_field(name="ランキング", value=leaderboard_text, inline=False)
