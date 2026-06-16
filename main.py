@@ -21,7 +21,8 @@ logger = logging.getLogger("TensokuMatchBot")
 COGS = [
     "cogs.report_cog",
     "cogs.stats_cog",
-    "cogs.recruit_cog"
+    "cogs.recruit_cog",
+    "cogs.letter_cog",
 ]
 
 # インテントの設定

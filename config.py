@@ -6,6 +6,8 @@ load_dotenv()
 
 TOKEN = os.getenv("DISCORD_TOKEN", "YOUR_DISCORD_BOT_TOKEN")
 PREFIX = os.getenv("BOT_PREFIX", "/")
+LETTER_CHANNEL_ID = int(os.getenv("LETTER_CHANNEL_ID", "0"))
+LETTER_ADMIN_CHANNEL_ID = int(os.getenv("LETTER_ADMIN_CHANNEL_ID", "0"))
 
 # Railway環境（ボリュームマウント先 /app/data があるか、または環境変数がある場合）は自動でパスを設定
 if os.path.exists("/app/data") or "RAILWAY_ENVIRONMENT" in os.environ:

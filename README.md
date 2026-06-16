@@ -88,7 +88,7 @@ python main.py
 ## 📂 フォルダ構成
 
 ```text
-tensoku_match_bot/
+tensoku_info_bot/
 ├── cogs/
 │   ├── recruit_cog.py  # 対戦募集・マッチング自動化 (/recruit)
 │   ├── report_cog.py   # 戦績の登録と削除 (/report, /delete_match)

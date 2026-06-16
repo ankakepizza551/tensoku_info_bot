@@ -55,6 +55,18 @@ async def init_db():
             await db.execute("ALTER TABLE matches ADD COLUMN rating_change2 REAL DEFAULT 0.0")
         await db.commit()
 
+        # 匿名お便りテーブル
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS letters (
+                letter_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                sender_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                body TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await db.commit()
+
 async def get_or_create_user(user_id: int, username: str):
     """ユーザー情報を取得、なければ新規登録。ユーザー名が変わっている場合は更新"""
     async with aiosqlite.connect(DB_PATH) as db:
@@ -273,6 +285,23 @@ async def get_user_stats(user_id: int) -> dict:
             "character_stats": char_stats,
             "head_to_head": h2h_stats
         }
+
+async def add_letter(sender_id: int, title: str, body: str) -> int:
+    """匿名お便りをDBに保存し、letter_id を返す"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "INSERT INTO letters (sender_id, title, body) VALUES (?, ?, ?)",
+            (sender_id, title, body)
+        )
+        await db.commit()
+        return cursor.lastrowid
+
+async def get_letter(letter_id: int):
+    """指定IDのお便りを取得（管理者用）"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM letters WHERE letter_id = ?", (letter_id,)) as cursor:
+            return await cursor.fetchone()
 
 async def get_leaderboard(min_matches: int = 1) -> list:
     """ランキング（リーダーボード）を取得。試合数が min_matches 以上のユーザーが対象"""
