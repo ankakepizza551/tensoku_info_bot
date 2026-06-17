@@ -25,18 +25,18 @@ class LetterModal(discord.ui.Modal, title="📨 匿名お便りを送る"):
     )
 
     async def on_submit(self, interaction: discord.Interaction):
-        channel_id = config.LETTER_CHANNEL_ID
-        if not channel_id:
+        admin_channel_id = config.LETTER_ADMIN_CHANNEL_ID
+        if not admin_channel_id:
             await interaction.response.send_message(
-                "❌ お便り投稿チャンネルが設定されていません。管理者にお知らせください。",
+                "❌ 送信先チャンネルが設定されていません。管理者にお知らせください。",
                 ephemeral=True,
             )
             return
 
-        channel = interaction.client.get_channel(channel_id)
-        if channel is None:
+        admin_channel = interaction.client.get_channel(admin_channel_id)
+        if admin_channel is None:
             await interaction.response.send_message(
-                "❌ 投稿先チャンネルが見つかりません。管理者にお知らせください。",
+                "❌ 送信先チャンネルが見つかりません。管理者にお知らせください。",
                 ephemeral=True,
             )
             return
@@ -48,17 +48,18 @@ class LetterModal(discord.ui.Modal, title="📨 匿名お便りを送る"):
         )
 
         embed = discord.Embed(
-            title=f"📨 {self.letter_title.value}",
-            description=self.letter_body.value,
+            title=f"📨 お便り No.{letter_id}",
             color=discord.Color.from_rgb(149, 117, 205),
         )
-        embed.set_footer(text=f"お便り No.{letter_id}　　送信者：匿名")
+        embed.add_field(name="件名", value=self.letter_title.value, inline=False)
+        embed.add_field(name="内容", value=self.letter_body.value, inline=False)
+        embed.set_footer(text="送信者：匿名　　/tegami_check で送信者を確認できます")
 
-        await channel.send(embed=embed)
+        await admin_channel.send(embed=embed)
         logger.info(f"匿名お便り投稿 letter_id={letter_id} sender={interaction.user.id}")
 
         await interaction.response.send_message(
-            f"✅ お便りを送信しました！（No.{letter_id}）",
+            f"✅ お便りを送信しました！",
             ephemeral=True,
         )
 

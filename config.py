@@ -18,7 +18,6 @@ def _parse_channel_id(env_key: str) -> int:
         )
         return 0
 
-LETTER_CHANNEL_ID = _parse_channel_id("LETTER_CHANNEL_ID")
 LETTER_ADMIN_CHANNEL_ID = _parse_channel_id("LETTER_ADMIN_CHANNEL_ID")
 
 # Railway環境（ボリュームマウント先 /app/data があるか、または環境変数がある場合）は自動でパスを設定
