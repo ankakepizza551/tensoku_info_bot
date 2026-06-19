@@ -31,6 +31,7 @@ intents = discord.Intents.default()
 intents.message_content = True  # プレフィックスコマンド用
 intents.guilds = True
 intents.members = True          # メンバー情報取得用
+intents.guild_messages = True   # スレッド内メッセージを含むギルドメッセージ
 
 # Botオブジェクトの作成
 bot = commands.Bot(command_prefix=config.PREFIX, intents=intents)

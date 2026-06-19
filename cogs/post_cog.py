@@ -7,6 +7,35 @@ from discord.ext import commands
 
 logger = logging.getLogger("TensokuMatchBot")
 
+
+# ─────────────────────────────────────────────
+#  スレッド対応ユーティリティ
+# ─────────────────────────────────────────────
+
+async def check_thread_permission(interaction: discord.Interaction) -> bool:
+    """スレッド内で Bot に送信権限があるか確認する。
+    権限不足の場合はエラーを返信して False を返す。
+    スレッド以外では常に True を返す。
+    """
+    if not isinstance(interaction.channel, discord.Thread):
+        return True
+    if interaction.guild is None:
+        return True
+
+    perms = interaction.channel.permissions_for(interaction.guild.me)
+    if not perms.send_messages_in_threads:
+        msg = (
+            "❌ このスレッドでBotが返信する権限がありません。\n"
+            "サーバー設定 → ロール → BotロールまたはチャンネルのBot権限で\n"
+            "**「スレッドでメッセージを送信」** をオンにしてください。"
+        )
+        if interaction.response.is_done():
+            await interaction.followup.send(msg, ephemeral=True)
+        else:
+            await interaction.response.send_message(msg, ephemeral=True)
+        return False
+    return True
+
 # ─────────────────────────────────────────────
 #  /post  シンプル投稿モーダル
 # ─────────────────────────────────────────────
@@ -45,6 +74,9 @@ class PostModal(discord.ui.Modal, title="📝 投稿を作成"):
         self.color = color
 
     async def on_submit(self, interaction: discord.Interaction):
+        if not await check_thread_permission(interaction):
+            return
+
         body = self.post_body.value
         image = self.image_url.value.strip() if self.image_url.value else None
 
@@ -178,6 +210,8 @@ class EmbedBuilderView(discord.ui.View):
         if not self._guard(interaction):
             await interaction.response.send_message("❌ 操作権限がありません。", ephemeral=True)
             return
+        if not await check_thread_permission(interaction):
+            return
         final = self.build_embed(is_preview=False)
         # フッターに投稿者名を付ける
         footer_text = f"投稿者: {interaction.user.display_name}"
@@ -191,6 +225,8 @@ class EmbedBuilderView(discord.ui.View):
             await interaction.message.delete()
         except discord.errors.NotFound:
             pass
+        # interaction.channel はスレッド内ではスレッドオブジェクトになるため、
+        # スレッド・通常チャンネルどちらでも正しい場所に送信される
         await interaction.channel.send(embed=final)
         await interaction.response.send_message("✅ 投稿しました！", ephemeral=True)
         self.stop()
@@ -375,6 +411,8 @@ class PostCog(commands.Cog):
         app_commands.Choice(name="⚪ ホワイト", value="236,240,241"),
     ])
     async def post(self, interaction: discord.Interaction, color: str = "52,152,219"):
+        if not await check_thread_permission(interaction):
+            return
         r, g, b = map(int, color.split(","))
         await interaction.response.send_modal(PostModal(color=discord.Color.from_rgb(r, g, b)))
 
@@ -385,6 +423,8 @@ class PostCog(commands.Cog):
         description="ボタン操作でステップ式に Embed 投稿を組み立てるビルダーを開きます",
     )
     async def embed_builder(self, interaction: discord.Interaction):
+        if not await check_thread_permission(interaction):
+            return
         view = EmbedBuilderView(author=interaction.user)
         preview = view.build_embed(is_preview=True)
         await interaction.response.send_message(embed=preview, view=view)
