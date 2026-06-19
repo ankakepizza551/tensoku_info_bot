@@ -56,13 +56,7 @@ class PostModal(discord.ui.Modal, title="📝 投稿を作成"):
     post_body = discord.ui.TextInput(
         label="本文",
         style=discord.TextStyle.paragraph,
-        placeholder=(
-            "内容を入力...\n"
-            "書式: **太字** *斜体* __下線__ ~~打消し~~ `コード`\n"
-            "見出し: # H1 / ## H2 / ### H3 / -# 小テキスト\n"
-            "引用: > テキスト   リスト: - 項目 / 1. 項目\n"
-            "末尾に画像URLを貼ると自動で埋め込まれます"
-        ),
+        placeholder="**太字** *斜体* __下線__ `コード` ## 見出し > 引用  末尾に画像URLを貼ると自動埋め込み",
         required=True,
         max_length=4000,
     )
@@ -412,12 +406,7 @@ class ForumPostModal(discord.ui.Modal, title="📋 フォーラム投稿を作�
         self.post_body = discord.ui.TextInput(
             label="本文（省略可）",
             style=discord.TextStyle.paragraph,
-            placeholder=(
-                "内容を入力...\n"
-                "書式: **太字** *斜体* __下線__ `コード`\n"
-                "見出し: ## H2 / ### H3   引用: > テキスト\n"
-                "末尾に画像URLを貼ると自動で埋め込まれます"
-            ),
+            placeholder="**太字** *斜体* __下線__ `コード` ## 見出し > 引用  末尾に画像URLを貼ると自動埋め込み",
             required=False,
             max_length=4000,
         )
