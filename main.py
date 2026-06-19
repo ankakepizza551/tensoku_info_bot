@@ -23,6 +23,7 @@ COGS = [
     "cogs.stats_cog",
     "cogs.recruit_cog",
     "cogs.letter_cog",
+    "cogs.post_cog",
 ]
 
 # インテントの設定
