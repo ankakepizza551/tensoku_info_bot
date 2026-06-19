@@ -15,26 +15,30 @@ logger = logging.getLogger("TensokuMatchBot")
 async def check_thread_permission(interaction: discord.Interaction) -> bool:
     """スレッド内で Bot に送信権限があるか確認する。
     権限不足の場合はエラーを返信して False を返す。
-    スレッド以外では常に True を返す。
+    スレッド以外・確認できない場合は True を返す（フェイルオープン）。
     """
-    if not isinstance(interaction.channel, discord.Thread):
-        return True
-    if interaction.guild is None:
-        return True
+    try:
+        if not isinstance(interaction.channel, discord.Thread):
+            return True
+        if interaction.guild is None or interaction.guild.me is None:
+            return True
 
-    perms = interaction.channel.permissions_for(interaction.guild.me)
-    if not perms.send_messages_in_threads:
-        msg = (
-            "❌ このスレッドでBotが返信する権限がありません。\n"
-            "サーバー設定 → ロール → BotロールまたはチャンネルのBot権限で\n"
-            "**「スレッドでメッセージを送信」** をオンにしてください。"
-        )
-        if interaction.response.is_done():
-            await interaction.followup.send(msg, ephemeral=True)
-        else:
-            await interaction.response.send_message(msg, ephemeral=True)
-        return False
-    return True
+        perms = interaction.channel.permissions_for(interaction.guild.me)
+        if not perms.send_messages_in_threads:
+            msg = (
+                "❌ このスレッドでBotが返信する権限がありません。\n"
+                "サーバー設定 → ロール → BotロールまたはチャンネルのBot権限で\n"
+                "**「スレッドでメッセージを送信」** をオンにしてください。"
+            )
+            if interaction.response.is_done():
+                await interaction.followup.send(msg, ephemeral=True)
+            else:
+                await interaction.response.send_message(msg, ephemeral=True)
+            return False
+        return True
+    except Exception as e:
+        logger.warning(f"check_thread_permission で例外（無視して続行）: {e}")
+        return True
 
 # ─────────────────────────────────────────────
 #  /post  シンプル投稿モーダル
@@ -522,10 +526,17 @@ class PostCog(commands.Cog):
         app_commands.Choice(name="⚪ ホワイト", value="236,240,241"),
     ])
     async def post(self, interaction: discord.Interaction, color: str = "52,152,219"):
-        if not await check_thread_permission(interaction):
-            return
-        r, g, b = map(int, color.split(","))
-        await interaction.response.send_modal(PostModal(color=discord.Color.from_rgb(r, g, b)))
+        try:
+            if not await check_thread_permission(interaction):
+                return
+            r, g, b = map(int, color.split(","))
+            await interaction.response.send_modal(PostModal(color=discord.Color.from_rgb(r, g, b)))
+        except Exception as e:
+            logger.error(f"/post エラー: {e}", exc_info=True)
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "❌ コマンドの実行中にエラーが発生しました。", ephemeral=True
+                )
 
     # ── /forum_post ─────────────────────────────
 
@@ -554,10 +565,17 @@ class PostCog(commands.Cog):
         channel: discord.ForumChannel,
         color: str = "52,152,219",
     ):
-        r, g, b = map(int, color.split(","))
-        await interaction.response.send_modal(
-            ForumPostModal(channel=channel, color=discord.Color.from_rgb(r, g, b))
-        )
+        try:
+            r, g, b = map(int, color.split(","))
+            await interaction.response.send_modal(
+                ForumPostModal(channel=channel, color=discord.Color.from_rgb(r, g, b))
+            )
+        except Exception as e:
+            logger.error(f"/forum_post エラー: {e}", exc_info=True)
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "❌ コマンドの実行中にエラーが発生しました。", ephemeral=True
+                )
 
     # ── /embed_builder ──────────────────────────
 
@@ -566,11 +584,18 @@ class PostCog(commands.Cog):
         description="ボタン操作でステップ式に Embed 投稿を組み立てるビルダーを開きます",
     )
     async def embed_builder(self, interaction: discord.Interaction):
-        if not await check_thread_permission(interaction):
-            return
-        view = EmbedBuilderView(author=interaction.user)
-        preview = view.build_embed(is_preview=True)
-        await interaction.response.send_message(embed=preview, view=view)
+        try:
+            if not await check_thread_permission(interaction):
+                return
+            view = EmbedBuilderView(author=interaction.user)
+            preview = view.build_embed(is_preview=True)
+            await interaction.response.send_message(embed=preview, view=view)
+        except Exception as e:
+            logger.error(f"/embed_builder エラー: {e}", exc_info=True)
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "❌ コマンドの実行中にエラーが発生しました。", ephemeral=True
+                )
 
     # ── /format_help ────────────────────────────
 
