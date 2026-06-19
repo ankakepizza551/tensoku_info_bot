@@ -388,6 +388,117 @@ class ColorSelect(discord.ui.Select):
 
 
 # ─────────────────────────────────────────────
+#  /forum_post  フォーラムチャンネル新規スレッド作成
+# ─────────────────────────────────────────────
+
+class ForumPostModal(discord.ui.Modal, title="📋 フォーラム投稿を作成"):
+    """フォーラムチャンネルに新規スレッド（最初の投稿）を作成するモーダル"""
+
+    def __init__(self, channel: discord.ForumChannel, color: discord.Color):
+        super().__init__()
+        self.target_channel = channel
+        self.color = color
+
+        self.thread_title = discord.ui.TextInput(
+            label="スレッドタイトル（必須）",
+            placeholder="フォーラムポストのタイトルを入力...",
+            required=True,
+            max_length=100,
+        )
+        self.post_body = discord.ui.TextInput(
+            label="本文（省略可）",
+            style=discord.TextStyle.paragraph,
+            placeholder=(
+                "内容を入力...\n"
+                "書式: **太字** *斜体* __下線__ `コード`\n"
+                "見出し: ## H2 / ### H3   引用: > テキスト\n"
+                "末尾に画像URLを貼ると自動で埋め込まれます"
+            ),
+            required=False,
+            max_length=4000,
+        )
+        self.image_url = discord.ui.TextInput(
+            label="画像URL（省略可）",
+            placeholder="https://example.com/image.png",
+            required=False,
+            max_length=500,
+        )
+        self.add_item(self.thread_title)
+        self.add_item(self.post_body)
+        self.add_item(self.image_url)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        # 権限チェック
+        perms = self.target_channel.permissions_for(interaction.guild.me)
+        if not perms.create_public_threads:
+            await interaction.response.send_message(
+                f"❌ {self.target_channel.mention} にスレッドを作成する権限がありません。\n"
+                "Botロールに **「公開スレッドを作成」** 権限を付与してください。",
+                ephemeral=True,
+            )
+            return
+
+        body = self.post_body.value or ""
+        image = self.image_url.value.strip() if self.image_url.value else None
+
+        # 本文末尾の画像URLを自動検出
+        if not image and body:
+            url_pattern = r"(https?://\S+\.(?:png|jpg|jpeg|gif|webp))\s*$"
+            m = re.search(url_pattern, body, re.IGNORECASE | re.MULTILINE)
+            if m:
+                image = m.group(1)
+                body = body[: m.start()].rstrip()
+
+        embed = discord.Embed(color=self.color)
+        if body:
+            embed.description = body
+        if image:
+            embed.set_image(url=image)
+        embed.set_footer(
+            text=f"投稿者: {interaction.user.display_name}",
+            icon_url=interaction.user.display_avatar.url,
+        )
+
+        # defer してからスレッド作成（時間がかかる場合があるため）
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            result = await self.target_channel.create_thread(
+                name=self.thread_title.value,
+                embed=embed,
+            )
+            thread = result.thread
+            logger.info(
+                f"forum_post: user={interaction.user.id} "
+                f"channel={self.target_channel.id} thread={thread.id}"
+            )
+            await interaction.followup.send(
+                f"✅ {self.target_channel.mention} に投稿しました！\n"
+                f"→ {thread.mention}",
+                ephemeral=True,
+            )
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "❌ 権限不足で投稿できませんでした。\n"
+                "Botロールの **「公開スレッドを作成」** 権限を確認してください。",
+                ephemeral=True,
+            )
+        except Exception as e:
+            logger.error(f"ForumPostModal エラー: {e}")
+            await interaction.followup.send(
+                f"❌ 投稿中にエラーが発生しました: {e}",
+                ephemeral=True,
+            )
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
+        logger.error(f"ForumPostModal on_error: {error}")
+        if not interaction.response.is_done():
+            await interaction.response.send_message(
+                "❌ 送信中にエラーが発生しました。", ephemeral=True
+            )
+
+
+# ─────────────────────────────────────────────
 #  Cog 本体
 # ─────────────────────────────────────────────
 
@@ -415,6 +526,38 @@ class PostCog(commands.Cog):
             return
         r, g, b = map(int, color.split(","))
         await interaction.response.send_modal(PostModal(color=discord.Color.from_rgb(r, g, b)))
+
+    # ── /forum_post ─────────────────────────────
+
+    @app_commands.command(
+        name="forum_post",
+        description="フォーラムチャンネルに新規スレッド（最初の投稿）を作成します",
+    )
+    @app_commands.describe(
+        channel="投稿先のフォーラムチャンネル",
+        color="投稿の色テーマ（省略可、デフォルト: ブルー）",
+    )
+    @app_commands.choices(color=[
+        app_commands.Choice(name="🔵 ブルー",   value="52,152,219"),
+        app_commands.Choice(name="🟢 グリーン", value="46,204,113"),
+        app_commands.Choice(name="🔴 レッド",   value="231,76,60"),
+        app_commands.Choice(name="🟣 パープル", value="149,117,205"),
+        app_commands.Choice(name="🟡 イエロー", value="241,196,15"),
+        app_commands.Choice(name="🟠 オレンジ", value="230,126,34"),
+        app_commands.Choice(name="🩷 ピンク",   value="255,105,180"),
+        app_commands.Choice(name="🩵 シアン",   value="26,188,156"),
+        app_commands.Choice(name="⚪ ホワイト", value="236,240,241"),
+    ])
+    async def forum_post(
+        self,
+        interaction: discord.Interaction,
+        channel: discord.ForumChannel,
+        color: str = "52,152,219",
+    ):
+        r, g, b = map(int, color.split(","))
+        await interaction.response.send_modal(
+            ForumPostModal(channel=channel, color=discord.Color.from_rgb(r, g, b))
+        )
 
     # ── /embed_builder ──────────────────────────
 

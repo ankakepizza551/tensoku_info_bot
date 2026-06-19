@@ -64,7 +64,21 @@
   | 本文 | Discord書式（`**太字**`、`## 見出し`、`> 引用`など）フル対応。末尾に画像URLを貼ると自動で埋め込まれます |
   | 画像URL | PNG / JPG / GIF / WebP などの直リンクを指定するとメイン画像として大きく表示されます |
 
-#### 7. インタラクティブ Embed ビルダー (`/embed_builder`)
+#### 7. フォーラムチャンネルへの新規投稿 (`/forum_post`)
+フォーラムチャンネルの「最初の投稿（スレッド作成）」をBotのモーダルから行います。  
+Discord標準のフォーラム投稿UIでは書式が限られますが、このコマンドなら画像埋め込みやDiscord書式をフル活用した綺麗な初回投稿が作れます。
+- **コマンド**: `/forum_post channel: [フォーラムチャンネル] [color: カラーテーマ(任意)]`
+- `channel` パラメータにはフォーラムチャンネルのみ選択できます
+- **入力欄**:
+  | 欄 | 説明 |
+  |---|---|
+  | スレッドタイトル | フォーラムポストのタイトル（必須、100文字以内） |
+  | 本文 | Discord書式フル対応。末尾に画像URLで自動埋め込みも可 |
+  | 画像URL | メイン画像を別途指定したい場合 |
+- 投稿完了後、作成されたスレッドへのリンクが自分にだけ表示されます
+- **必要権限**: BotロールまたはフォーラムチャンネルのBot権限に **「公開スレッドを作成」** が必要
+
+#### 8. インタラクティブ Embed ビルダー (`/embed_builder`)
 ボタン操作でステップごとに Embed を組み立て、プレビューを確認しながら投稿できます。
 - **コマンド**: `/embed_builder`
 - **操作ボタン**:
@@ -148,7 +162,7 @@ python main.py
 tensoku_info_bot/
 ├── cogs/
 │   ├── letter_cog.py   # 匿名お便り (/tegami, /tegami_check)
-│   ├── post_cog.py     # 投稿補助・文字装飾 (/post, /embed_builder, /format_help)
+│   ├── post_cog.py     # 投稿補助・文字装飾 (/post, /forum_post, /embed_builder, /format_help)
 │   ├── recruit_cog.py  # 対戦募集・マッチング自動化 (/recruit)
 │   ├── report_cog.py   # 戦績の登録と削除 (/report, /delete_match)
 │   └── stats_cog.py    # スタッツとランキング表示 (/stats, /leaderboard)
