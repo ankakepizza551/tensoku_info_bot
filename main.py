@@ -24,6 +24,7 @@ COGS = [
     "cogs.recruit_cog",
     "cogs.letter_cog",
     "cogs.post_cog",
+    "cogs.poll_cog",
 ]
 
 # インテントの設定

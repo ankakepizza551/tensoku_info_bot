@@ -67,6 +67,51 @@ async def init_db():
         """)
         await db.commit()
 
+        # 投票アンケートテーブル
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS polls (
+                poll_id TEXT PRIMARY KEY,
+                channel_id INTEGER NOT NULL,
+                creator_id INTEGER NOT NULL,
+                question TEXT NOT NULL,
+                options TEXT NOT NULL,
+                is_active INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS poll_votes (
+                poll_id TEXT NOT NULL,
+                user_id INTEGER NOT NULL,
+                option_index INTEGER NOT NULL,
+                PRIMARY KEY (poll_id, user_id, option_index),
+                FOREIGN KEY (poll_id) REFERENCES polls(poll_id)
+            )
+        """)
+        # テキスト回答式アンケートテーブル
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS surveys (
+                survey_id TEXT PRIMARY KEY,
+                channel_id INTEGER NOT NULL,
+                creator_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                questions TEXT NOT NULL,
+                is_active INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS survey_responses (
+                response_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                survey_id TEXT NOT NULL,
+                user_id INTEGER NOT NULL,
+                answers TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (survey_id) REFERENCES surveys(survey_id)
+            )
+        """)
+        await db.commit()
+
 async def get_or_create_user(user_id: int, username: str):
     """ユーザー情報を取得、なければ新規登録。ユーザー名が変わっている場合は更新"""
     async with aiosqlite.connect(DB_PATH) as db:
@@ -350,3 +395,141 @@ async def get_leaderboard(min_matches: int = 1) -> list:
         # レーティング（Elo）で降順ソート、同率なら勝率でソート
         leaderboard_data.sort(key=lambda x: (x["rating"], x["win_rate"]), reverse=True)
         return leaderboard_data
+
+# ── 投票アンケート (Poll) ──────────────────────────────────────
+
+async def create_poll(poll_id: str, channel_id: int, creator_id: int, question: str, options: list) -> None:
+    """投票アンケートをDBに保存する"""
+    import json
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO polls (poll_id, channel_id, creator_id, question, options) VALUES (?, ?, ?, ?, ?)",
+            (poll_id, channel_id, creator_id, question, json.dumps(options, ensure_ascii=False))
+        )
+        await db.commit()
+
+async def get_poll(poll_id: str):
+    """指定IDの投票アンケートを取得する"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM polls WHERE poll_id = ?", (poll_id,)) as cursor:
+            return await cursor.fetchone()
+
+async def get_active_polls() -> list:
+    """アクティブな投票アンケートを全件取得する（Bot再起動時のView再登録用）"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM polls WHERE is_active = 1") as cursor:
+            return await cursor.fetchall()
+
+async def toggle_poll_vote(poll_id: str, user_id: int, option_index: int) -> bool:
+    """投票をトグルする。追加した場合はTrue、取り消した場合はFalseを返す"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT 1 FROM poll_votes WHERE poll_id = ? AND user_id = ? AND option_index = ?",
+            (poll_id, user_id, option_index)
+        ) as cursor:
+            exists = await cursor.fetchone()
+
+        if exists:
+            await db.execute(
+                "DELETE FROM poll_votes WHERE poll_id = ? AND user_id = ? AND option_index = ?",
+                (poll_id, user_id, option_index)
+            )
+            await db.commit()
+            return False
+        else:
+            await db.execute(
+                "INSERT INTO poll_votes (poll_id, user_id, option_index) VALUES (?, ?, ?)",
+                (poll_id, user_id, option_index)
+            )
+            await db.commit()
+            return True
+
+async def get_poll_votes(poll_id: str) -> list:
+    """指定アンケートの全投票レコードを返す"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT user_id, option_index FROM poll_votes WHERE poll_id = ?", (poll_id,)
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+async def get_user_poll_votes(poll_id: str, user_id: int) -> list:
+    """指定ユーザーが投票済みのoption_indexリストを返す"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT option_index FROM poll_votes WHERE poll_id = ? AND user_id = ?",
+            (poll_id, user_id)
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [r[0] for r in rows]
+
+async def close_poll(poll_id: str) -> None:
+    """投票アンケートを締め切る"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE polls SET is_active = 0 WHERE poll_id = ?", (poll_id,))
+        await db.commit()
+
+# ── テキスト回答式アンケート (Survey) ──────────────────────────
+
+async def create_survey(survey_id: str, channel_id: int, creator_id: int, title: str, questions: list) -> None:
+    """テキスト回答式アンケートをDBに保存する"""
+    import json
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO surveys (survey_id, channel_id, creator_id, title, questions) VALUES (?, ?, ?, ?, ?)",
+            (survey_id, channel_id, creator_id, title, json.dumps(questions, ensure_ascii=False))
+        )
+        await db.commit()
+
+async def get_survey(survey_id: str):
+    """指定IDのアンケートを取得する"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM surveys WHERE survey_id = ?", (survey_id,)) as cursor:
+            return await cursor.fetchone()
+
+async def get_active_surveys() -> list:
+    """アクティブなアンケートを全件取得する（Bot再起動時のView再登録用）"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM surveys WHERE is_active = 1") as cursor:
+            return await cursor.fetchall()
+
+async def add_survey_response(survey_id: str, user_id: int, answers: list) -> None:
+    """アンケートへの回答を保存する"""
+    import json
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO survey_responses (survey_id, user_id, answers) VALUES (?, ?, ?)",
+            (survey_id, user_id, json.dumps(answers, ensure_ascii=False))
+        )
+        await db.commit()
+
+async def get_survey_responses(survey_id: str) -> list:
+    """アンケートの全回答を返す"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM survey_responses WHERE survey_id = ? ORDER BY created_at",
+            (survey_id,)
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+async def has_survey_responded(survey_id: str, user_id: int) -> bool:
+    """指定ユーザーがすでに回答済みかどうかを返す"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT 1 FROM survey_responses WHERE survey_id = ? AND user_id = ?",
+            (survey_id, user_id)
+        ) as cursor:
+            return await cursor.fetchone() is not None
+
+async def close_survey(survey_id: str) -> None:
+    """アンケートを締め切る"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE surveys SET is_active = 0 WHERE survey_id = ?", (survey_id,))
+        await db.commit()
