@@ -1,11 +1,14 @@
+import datetime
 import json
 from typing import Optional
 
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 import database.db_manager as db
+
+JST = datetime.timezone(datetime.timedelta(hours=9))
 
 
 # ──────────────────────────────────────────────────────────────
@@ -18,6 +21,8 @@ def build_poll_embed(
     vote_rows: list,
     is_active: bool = True,
     creator_name: str = "",
+    allow_multiple: bool = True,
+    deadline: str | None = None,
 ) -> discord.Embed:
     """ボタン投票アンケートの結果Embedを構築する"""
     option_counts = [0] * len(options)
@@ -43,9 +48,14 @@ def build_poll_embed(
     description = "\n\n".join(lines) if lines else "選択肢がありません。"
     color = discord.Color.blue() if is_active else discord.Color.from_rgb(120, 120, 120)
     status = "🟢 投票受付中" if is_active else "🔴 終了"
+    select_mode = "複数選択可" if allow_multiple else "単一選択"
+
+    footer_parts = [status, select_mode, f"参加者: {total_participants}人"]
+    if deadline:
+        footer_parts.append(f"期限: {deadline}")
 
     embed = discord.Embed(title=f"📊 {question}", description=description, color=color)
-    embed.set_footer(text=f"{status} | 複数選択可 | 参加者: {total_participants}人")
+    embed.set_footer(text=" | ".join(footer_parts))
     if creator_name:
         embed.set_author(name=f"作成: {creator_name}")
     return embed
@@ -94,14 +104,33 @@ class PollButton(discord.ui.Button):
             )
             return
 
-        toggled = await db.toggle_poll_vote(self.poll_id, interaction.user.id, self.option_index)
+        # 期限チェック
+        deadline = poll["deadline"]
+        if deadline:
+            now_str = datetime.datetime.now(JST).strftime("%Y-%m-%d %H:%M")
+            if now_str >= deadline:
+                await db.close_poll(self.poll_id)
+                await interaction.response.send_message(
+                    "⚠️ このアンケートの期限が過ぎています。", ephemeral=True
+                )
+                return
+
+        allow_multiple = bool(poll["allow_multiple"])
         options = json.loads(poll["options"])
+
+        if allow_multiple:
+            toggled = await db.toggle_poll_vote(self.poll_id, interaction.user.id, self.option_index)
+        else:
+            toggled = await db.set_single_poll_vote(self.poll_id, interaction.user.id, self.option_index)
+
         vote_rows = await db.get_poll_votes(self.poll_id)
         embed = build_poll_embed(
             question=poll["question"],
             options=options,
             vote_rows=vote_rows,
             is_active=True,
+            allow_multiple=allow_multiple,
+            deadline=deadline,
         )
         await interaction.response.edit_message(embed=embed, view=self.view)
 
@@ -303,15 +332,44 @@ class PollCog(commands.Cog):
         for survey in active_surveys:
             self.bot.add_view(SurveyAnswerView(survey_id=survey["survey_id"]))
 
+        if not self._check_expired_polls.is_running():
+            self._check_expired_polls.start()
+
+    @tasks.loop(minutes=1)
+    async def _check_expired_polls(self):
+        """期限切れの投票アンケートを自動締め切りする"""
+        expired = await db.get_expired_polls()
+        for poll in expired:
+            await db.close_poll(poll["poll_id"])
+            try:
+                ch = self.bot.get_channel(poll["channel_id"])
+                if ch:
+                    msg = await ch.fetch_message(int(poll["poll_id"]))
+                    options = json.loads(poll["options"])
+                    vote_rows = await db.get_poll_votes(poll["poll_id"])
+                    embed = build_poll_embed(
+                        question=poll["question"],
+                        options=options,
+                        vote_rows=vote_rows,
+                        is_active=False,
+                        allow_multiple=bool(poll["allow_multiple"]),
+                        deadline=poll["deadline"],
+                    )
+                    await msg.edit(embed=embed, view=None)
+            except Exception:
+                pass
+
     # ── /poll ────────────────────────────────────────────────
 
     @app_commands.command(
         name="poll",
-        description="ボタン式の投票アンケートを作成します（複数選択可）",
+        description="ボタン式の投票アンケートを作成します",
     )
     @app_commands.describe(
         question="アンケートの質問",
         options="選択肢をカンマ区切りで入力（2〜10個）例: 霊夢,魔理沙,チルノ",
+        allow_multiple="複数選択を許可するか（デフォルト: はい）",
+        deadline="締め切り日時（例: 2026-06-30 23:59）省略可",
         channel="投稿するチャンネル（省略時は現在のチャンネル）",
     )
     async def poll(
@@ -319,6 +377,8 @@ class PollCog(commands.Cog):
         interaction: discord.Interaction,
         question: str,
         options: str,
+        allow_multiple: bool = True,
+        deadline: Optional[str] = None,
         channel: Optional[discord.TextChannel] = None,
     ):
         target_channel = channel or interaction.channel
@@ -336,12 +396,37 @@ class PollCog(commands.Cog):
             )
             return
 
+        # deadline のバリデーション
+        deadline_str: str | None = None
+        if deadline:
+            parsed = None
+            for fmt in ("%Y-%m-%d %H:%M", "%Y/%m/%d %H:%M"):
+                try:
+                    parsed = datetime.datetime.strptime(deadline, fmt).replace(tzinfo=JST)
+                    break
+                except ValueError:
+                    continue
+            if parsed is None:
+                await interaction.response.send_message(
+                    "❌ 期限の形式が正しくありません。`YYYY-MM-DD HH:MM` の形式で入力してください。\n例: `2026-06-30 23:59`",
+                    ephemeral=True,
+                )
+                return
+            if parsed <= datetime.datetime.now(JST):
+                await interaction.response.send_message(
+                    "❌ 期限は現在より未来の日時を指定してください。", ephemeral=True
+                )
+                return
+            deadline_str = parsed.strftime("%Y-%m-%d %H:%M")
+
         embed = build_poll_embed(
             question=question,
             options=option_list,
             vote_rows=[],
             is_active=True,
             creator_name=interaction.user.display_name,
+            allow_multiple=allow_multiple,
+            deadline=deadline_str,
         )
 
         await interaction.response.defer(ephemeral=True)
@@ -354,15 +439,23 @@ class PollCog(commands.Cog):
             creator_id=interaction.user.id,
             question=question,
             options=option_list,
+            allow_multiple=allow_multiple,
+            deadline=deadline_str,
         )
 
         view = PollView(poll_id=poll_id, options=option_list)
         self.bot.add_view(view)
         await msg.edit(view=view)
 
+        detail = ""
+        if not allow_multiple:
+            detail += "\n・単一選択モード"
+        if deadline_str:
+            detail += f"\n・期限: {deadline_str}"
+
         await interaction.followup.send(
             f"✅ 投票アンケートを {target_channel.mention} に作成しました！\n"
-            f"メッセージID: `{poll_id}`",
+            f"メッセージID: `{poll_id}`{detail}",
             ephemeral=True,
         )
 
@@ -408,6 +501,8 @@ class PollCog(commands.Cog):
                     options=options,
                     vote_rows=vote_rows,
                     is_active=False,
+                    allow_multiple=bool(poll["allow_multiple"]),
+                    deadline=poll["deadline"],
                 )
                 await msg.edit(embed=embed, view=None)
         except Exception:
