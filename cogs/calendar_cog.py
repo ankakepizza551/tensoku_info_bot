@@ -154,7 +154,7 @@ class CalendarCog(commands.Cog):
             f"✅ カレンダーを {target.mention} に設置しました！", ephemeral=True
         )
 
-    @app_commands.command(name="add_event", description="カレンダーにイベントを追加します（管理者のみ）")
+    @app_commands.command(name="add_event", description="カレンダーにイベントを追加します")
     @app_commands.describe(
         date="日付（例: 2026-06-15 または 2026/06/15）",
         name="大会名",
@@ -167,7 +167,6 @@ class CalendarCog(commands.Cog):
         app_commands.Choice(name="オン大会 🟢", value="online"),
         app_commands.Choice(name="オフ大会 🔴", value="offline"),
     ])
-    @app_commands.default_permissions(manage_guild=True)
     async def add_event(
         self,
         interaction: discord.Interaction,
@@ -215,9 +214,8 @@ class CalendarCog(commands.Cog):
             f"✅ **{date_str} {name}** を追加しました。", ephemeral=True
         )
 
-    @app_commands.command(name="remove_event", description="カレンダーからイベントを削除します（管理者のみ）")
+    @app_commands.command(name="remove_event", description="カレンダーからイベントを削除します")
     @app_commands.describe(event_id="削除するイベント（一覧から選択）")
-    @app_commands.default_permissions(manage_guild=True)
     async def remove_event(self, interaction: discord.Interaction, event_id: int):
         success = await db.delete_event(event_id, interaction.guild_id)
         if not success:
