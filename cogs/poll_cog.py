@@ -512,7 +512,6 @@ class PollCog(commands.Cog):
         await interaction.response.send_message(
             "✅ 投票アンケートを締め切りました。\n**最終結果:**",
             embed=result_embed,
-            ephemeral=True,
         )
 
     # ── /survey ──────────────────────────────────────────────
