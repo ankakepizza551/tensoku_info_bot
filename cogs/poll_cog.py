@@ -356,6 +356,7 @@ class PollCog(commands.Cog):
                         deadline=poll["deadline"],
                     )
                     await msg.edit(embed=embed, view=None)
+                    await ch.send("⏰ 投票アンケートの時間が終了しました。\n**最終結果:**", embed=embed)
             except Exception:
                 pass
 
