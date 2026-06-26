@@ -26,6 +26,7 @@ COGS = [
     "cogs.post_cog",
     "cogs.poll_cog",
     "cogs.calendar_cog",
+    "cogs.dice_cog",
 ]
 
 # インテントの設定
