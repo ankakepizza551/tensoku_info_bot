@@ -490,26 +490,29 @@ class PollCog(commands.Cog):
 
         await db.close_poll(message_id)
 
+        options = json.loads(poll["options"])
+        vote_rows = await db.get_poll_votes(message_id)
+        result_embed = build_poll_embed(
+            question=poll["question"],
+            options=options,
+            vote_rows=vote_rows,
+            is_active=False,
+            allow_multiple=bool(poll["allow_multiple"]),
+            deadline=poll["deadline"],
+        )
+
         try:
             ch = self.bot.get_channel(poll["channel_id"])
             if ch:
                 msg = await ch.fetch_message(int(message_id))
-                options = json.loads(poll["options"])
-                vote_rows = await db.get_poll_votes(message_id)
-                embed = build_poll_embed(
-                    question=poll["question"],
-                    options=options,
-                    vote_rows=vote_rows,
-                    is_active=False,
-                    allow_multiple=bool(poll["allow_multiple"]),
-                    deadline=poll["deadline"],
-                )
-                await msg.edit(embed=embed, view=None)
+                await msg.edit(embed=result_embed, view=None)
         except Exception:
             pass
 
         await interaction.response.send_message(
-            "✅ 投票アンケートを締め切りました。", ephemeral=True
+            "✅ 投票アンケートを締め切りました。\n**最終結果:**",
+            embed=result_embed,
+            ephemeral=True,
         )
 
     # ── /survey ──────────────────────────────────────────────
