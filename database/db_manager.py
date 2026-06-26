@@ -55,6 +55,13 @@ async def init_db():
             await db.execute("ALTER TABLE matches ADD COLUMN rating_change2 REAL DEFAULT 0.0")
         await db.commit()
 
+        # polls テーブルに is_anonymous カラムが存在しない場合は追加
+        async with db.execute("PRAGMA table_info(polls)") as cursor:
+            columns = [row[1] for row in await cursor.fetchall()]
+        if "is_anonymous" not in columns:
+            await db.execute("ALTER TABLE polls ADD COLUMN is_anonymous INTEGER DEFAULT 1")
+            await db.commit()
+
         # 匿名お便りテーブル
         await db.execute("""
             CREATE TABLE IF NOT EXISTS letters (
@@ -77,6 +84,7 @@ async def init_db():
                 options TEXT NOT NULL,
                 is_active INTEGER DEFAULT 1,
                 allow_multiple INTEGER DEFAULT 1,
+                is_anonymous INTEGER DEFAULT 1,
                 deadline TEXT DEFAULT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -409,13 +417,13 @@ async def get_leaderboard(min_matches: int = 1) -> list:
 
 # ── 投票アンケート (Poll) ──────────────────────────────────────
 
-async def create_poll(poll_id: str, channel_id: int, creator_id: int, question: str, options: list, allow_multiple: bool = True, deadline: str | None = None) -> None:
+async def create_poll(poll_id: str, channel_id: int, creator_id: int, question: str, options: list, allow_multiple: bool = True, is_anonymous: bool = True, deadline: str | None = None) -> None:
     """投票アンケートをDBに保存する"""
     import json
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "INSERT INTO polls (poll_id, channel_id, creator_id, question, options, allow_multiple, deadline) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (poll_id, channel_id, creator_id, question, json.dumps(options, ensure_ascii=False), int(allow_multiple), deadline)
+            "INSERT INTO polls (poll_id, channel_id, creator_id, question, options, allow_multiple, is_anonymous, deadline) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (poll_id, channel_id, creator_id, question, json.dumps(options, ensure_ascii=False), int(allow_multiple), int(is_anonymous), deadline)
         )
         await db.commit()
 

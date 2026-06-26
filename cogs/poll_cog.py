@@ -23,6 +23,7 @@ def build_poll_embed(
     creator_name: str = "",
     allow_multiple: bool = True,
     deadline: str | None = None,
+    voter_names_per_option: list[list[str]] | None = None,
 ) -> discord.Embed:
     """ボタン投票アンケートの結果Embedを構築する"""
     option_counts = [0] * len(options)
@@ -43,7 +44,10 @@ def build_poll_embed(
         else:
             bar = "░" * 15
             pct_str = "0.0%"
-        lines.append(f"**{i + 1}. {option}**\n`{bar}` {count}票 ({pct_str})")
+        line = f"**{i + 1}. {option}**\n`{bar}` {count}票 ({pct_str})"
+        if voter_names_per_option and voter_names_per_option[i]:
+            line += "\n└ " + "、".join(voter_names_per_option[i])
+        lines.append(line)
 
     description = "\n\n".join(lines) if lines else "選択肢がありません。"
     color = discord.Color.blue() if is_active else discord.Color.from_rgb(120, 120, 120)
@@ -312,6 +316,18 @@ class SurveyCreateModal(discord.ui.Modal, title="アンケートを作成"):
         )
 
 
+def build_voter_names(vote_rows: list, options: list[str], bot: commands.Bot) -> list[list[str]]:
+    """選択肢ごとの投票者表示名リストを返す"""
+    names_per_option: list[list[str]] = [[] for _ in options]
+    for row in vote_rows:
+        idx = row["option_index"]
+        if 0 <= idx < len(options):
+            user = bot.get_user(row["user_id"])
+            name = user.display_name if user else f"User {row['user_id']}"
+            names_per_option[idx].append(name)
+    return names_per_option
+
+
 # ──────────────────────────────────────────────────────────────
 # PollCog
 # ──────────────────────────────────────────────────────────────
@@ -347,6 +363,8 @@ class PollCog(commands.Cog):
                     msg = await ch.fetch_message(int(poll["poll_id"]))
                     options = json.loads(poll["options"])
                     vote_rows = await db.get_poll_votes(poll["poll_id"])
+                    is_anonymous = bool(poll["is_anonymous"]) if "is_anonymous" in poll.keys() else True
+                    voter_names = None if is_anonymous else build_voter_names(vote_rows, options, self.bot)
                     embed = build_poll_embed(
                         question=poll["question"],
                         options=options,
@@ -354,6 +372,7 @@ class PollCog(commands.Cog):
                         is_active=False,
                         allow_multiple=bool(poll["allow_multiple"]),
                         deadline=poll["deadline"],
+                        voter_names_per_option=voter_names,
                     )
                     await msg.edit(embed=embed, view=None)
                     await ch.send("⏰ 投票アンケートの時間が終了しました。\n**最終結果:**", embed=embed)
@@ -370,6 +389,7 @@ class PollCog(commands.Cog):
         question="アンケートの質問",
         options="選択肢をカンマ区切りで入力（2〜10個）例: 霊夢,魔理沙,チルノ",
         allow_multiple="複数選択を許可するか（デフォルト: はい）",
+        anonymous="投票を匿名にするか（デフォルト: はい）終了時に非匿名なら誰が何に投票したか表示",
         deadline="締め切り日時（例: 2026-06-30 23:59）省略可",
         channel="投稿するチャンネル（省略時は現在のチャンネル）",
     )
@@ -379,6 +399,7 @@ class PollCog(commands.Cog):
         question: str,
         options: str,
         allow_multiple: bool = True,
+        anonymous: bool = True,
         deadline: Optional[str] = None,
         channel: Optional[discord.TextChannel] = None,
     ):
@@ -441,6 +462,7 @@ class PollCog(commands.Cog):
             question=question,
             options=option_list,
             allow_multiple=allow_multiple,
+            is_anonymous=anonymous,
             deadline=deadline_str,
         )
 
@@ -451,6 +473,8 @@ class PollCog(commands.Cog):
         detail = ""
         if not allow_multiple:
             detail += "\n・単一選択モード"
+        if not anonymous:
+            detail += "\n・非匿名モード（終了時に投票者名を表示）"
         if deadline_str:
             detail += f"\n・期限: {deadline_str}"
 
@@ -493,6 +517,8 @@ class PollCog(commands.Cog):
 
         options = json.loads(poll["options"])
         vote_rows = await db.get_poll_votes(message_id)
+        is_anonymous = bool(poll["is_anonymous"]) if "is_anonymous" in poll.keys() else True
+        voter_names = None if is_anonymous else build_voter_names(vote_rows, options, self.bot)
         result_embed = build_poll_embed(
             question=poll["question"],
             options=options,
@@ -500,6 +526,7 @@ class PollCog(commands.Cog):
             is_active=False,
             allow_multiple=bool(poll["allow_multiple"]),
             deadline=poll["deadline"],
+            voter_names_per_option=voter_names,
         )
 
         try:
