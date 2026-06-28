@@ -155,6 +155,19 @@ async def init_db():
             await db.execute("ALTER TABLE polls ADD COLUMN deadline TEXT DEFAULT NULL")
         await db.commit()
 
+        # ピザテーブル
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS pizzas (
+                pizza_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                description TEXT,
+                rating INTEGER DEFAULT 3,
+                added_by INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await db.commit()
+
 async def get_or_create_user(user_id: int, username: str):
     """ユーザー情報を取得、なければ新規登録。ユーザー名が変わっている場合は更新"""
     async with aiosqlite.connect(DB_PATH) as db:
@@ -677,3 +690,37 @@ async def close_survey(survey_id: str) -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("UPDATE surveys SET is_active = 0 WHERE survey_id = ?", (survey_id,))
         await db.commit()
+
+# ── ピザ管理 ─────────────────────────────────────────────────────
+
+async def add_pizza(name: str, description: str, rating: int, added_by: int) -> int:
+    """ピザを登録し、pizza_id を返す"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "INSERT INTO pizzas (name, description, rating, added_by) VALUES (?, ?, ?, ?)",
+            (name, description, rating, added_by)
+        )
+        await db.commit()
+        return cursor.lastrowid
+
+async def get_random_pizza() -> dict | None:
+    """ランダムにピザを1件取得する"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM pizzas ORDER BY RANDOM() LIMIT 1") as cursor:
+            row = await cursor.fetchone()
+        return dict(row) if row else None
+
+async def get_all_pizzas() -> list:
+    """全ピザを取得する"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM pizzas ORDER BY created_at DESC") as cursor:
+            return [dict(r) for r in await cursor.fetchall()]
+
+async def delete_pizza(pizza_id: int) -> bool:
+    """指定IDのピザを削除する。削除成功ならTrueを返す"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("DELETE FROM pizzas WHERE pizza_id = ?", (pizza_id,)) as cursor:
+            await db.commit()
+            return cursor.rowcount > 0
