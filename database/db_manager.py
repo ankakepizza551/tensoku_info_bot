@@ -198,6 +198,25 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # 記事投稿パネルテーブル
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS article_panels (
+                message_id INTEGER PRIMARY KEY,
+                channel_id INTEGER NOT NULL,
+                forum_channel_id INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        # 記事スレッドコントロールパネルテーブル
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS article_threads (
+                thread_id INTEGER PRIMARY KEY,
+                post_message_id INTEGER NOT NULL,
+                control_message_id INTEGER NOT NULL,
+                author_id INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         await db.commit()
 
 async def get_or_create_user(user_id: int, username: str):
@@ -867,3 +886,63 @@ async def get_recruit_defaults(user_id: int) -> dict | None:
         ) as cursor:
             row = await cursor.fetchone()
         return dict(row) if row else None
+
+# ── 記事投稿パネル ────────────────────────────────────────────────
+
+async def add_article_panel(message_id: int, channel_id: int, forum_channel_id: int) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO article_panels (message_id, channel_id, forum_channel_id) VALUES (?, ?, ?)",
+            (message_id, channel_id, forum_channel_id)
+        )
+        await db.commit()
+
+async def get_article_panels() -> list:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM article_panels") as cursor:
+            return [dict(r) for r in await cursor.fetchall()]
+
+async def delete_article_panel(message_id: int) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "DELETE FROM article_panels WHERE message_id = ?", (message_id,)
+        ) as cursor:
+            await db.commit()
+            return cursor.rowcount > 0
+
+# ── 記事スレッドコントロールパネル ───────────────────────────────
+
+async def add_article_thread(
+    thread_id: int, post_message_id: int, control_message_id: int, author_id: int
+) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT OR REPLACE INTO article_threads
+               (thread_id, post_message_id, control_message_id, author_id) VALUES (?, ?, ?, ?)""",
+            (thread_id, post_message_id, control_message_id, author_id)
+        )
+        await db.commit()
+
+async def get_article_thread(thread_id: int) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM article_threads WHERE thread_id = ?", (thread_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        return dict(row) if row else None
+
+async def get_article_threads() -> list:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM article_threads") as cursor:
+            return [dict(r) for r in await cursor.fetchall()]
+
+async def delete_article_thread(thread_id: int) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "DELETE FROM article_threads WHERE thread_id = ?", (thread_id,)
+        ) as cursor:
+            await db.commit()
+            return cursor.rowcount > 0
