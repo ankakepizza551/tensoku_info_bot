@@ -71,13 +71,46 @@ class LetterModal(discord.ui.Modal, title="📨 匿名お便りを送る"):
         )
 
 
+class LetterPanelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        btn = discord.ui.Button(
+            label="📨 匿名お便りを送る",
+            style=discord.ButtonStyle.primary,
+            custom_id="letter_panel",
+        )
+        btn.callback = self._btn_callback
+        self.add_item(btn)
+
+    async def _btn_callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(LetterModal())
+
+
 class LetterCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
+    async def cog_load(self):
+        self.bot.add_view(LetterPanelView())
+
     @app_commands.command(name="tegami", description="匿名でお便りを送ります（送信者名は表示されません）")
     async def tegami(self, interaction: discord.Interaction):
         await interaction.response.send_modal(LetterModal())
+
+    @app_commands.command(name="setup_letter_panel", description="匿名お便りボタンをこのチャンネルに設置します（管理者用）")
+    @app_commands.default_permissions(manage_guild=True)
+    async def setup_letter_panel(self, interaction: discord.Interaction):
+        embed = discord.Embed(
+            title="📨 匿名お便り",
+            description=(
+                "下のボタンを押すとお便り送信フォームが開きます。\n"
+                "送信者名は管理者にも **表示されません**（完全匿名）。"
+            ),
+            color=discord.Color.from_rgb(149, 117, 205),
+        )
+        view = LetterPanelView()
+        await interaction.response.send_message(embed=embed, view=view)
+        logger.info(f"setup_letter_panel: channel={interaction.channel_id} by user={interaction.user.id}")
 
     @app_commands.command(name="tegami_check", description="【管理者専用】お便りの送信者を確認します")
     @app_commands.describe(letter_id="確認したいお便りのNo.")
