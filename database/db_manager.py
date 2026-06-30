@@ -166,6 +166,15 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # 対戦募集パネルテーブル（再起動後もボタンを復元するため）
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS recruit_panels (
+                message_id INTEGER PRIMARY KEY,
+                channel_id INTEGER NOT NULL,
+                forum_channel_id INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         await db.commit()
 
 async def get_or_create_user(user_id: int, username: str):
@@ -722,5 +731,27 @@ async def delete_pizza(pizza_id: int) -> bool:
     """指定IDのピザを削除する。削除成功ならTrueを返す"""
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("DELETE FROM pizzas WHERE pizza_id = ?", (pizza_id,)) as cursor:
+            await db.commit()
+            return cursor.rowcount > 0
+
+# ── 対戦募集パネル ────────────────────────────────────────────────
+
+async def add_recruit_panel(message_id: int, channel_id: int, forum_channel_id: int) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO recruit_panels (message_id, channel_id, forum_channel_id) VALUES (?, ?, ?)",
+            (message_id, channel_id, forum_channel_id)
+        )
+        await db.commit()
+
+async def get_recruit_panels() -> list:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM recruit_panels") as cursor:
+            return [dict(r) for r in await cursor.fetchall()]
+
+async def delete_recruit_panel(message_id: int) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("DELETE FROM recruit_panels WHERE message_id = ?", (message_id,)) as cursor:
             await db.commit()
             return cursor.rowcount > 0

@@ -9,6 +9,26 @@ logger = logging.getLogger("TensokuMatchBot")
 
 
 # ─────────────────────────────────────────────
+#  自動装飾
+# ─────────────────────────────────────────────
+
+def _auto_decorate(text: str) -> str:
+    """■ で始まる行を太字化し、セクション間に空行を挿入する。"""
+    lines = text.splitlines()
+    result: list[str] = []
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("■"):
+            # セクション間の空行（先頭行・直前がすでに空行の場合はスキップ）
+            if i > 0 and result and result[-1] != "":
+                result.append("")
+            result.append(f"**{stripped}**")
+        else:
+            result.append(line)
+    return "\n".join(result)
+
+
+# ─────────────────────────────────────────────
 #  スレッド対応ユーティリティ
 # ─────────────────────────────────────────────
 
@@ -75,7 +95,7 @@ class PostModal(discord.ui.Modal, title="📝 投稿を作成"):
         if not await check_thread_permission(interaction):
             return
 
-        body = self.post_body.value
+        body = _auto_decorate(self.post_body.value)
         image = self.image_url.value.strip() if self.image_url.value else None
 
         # 本文末尾の画像URLを自動検出
@@ -277,7 +297,7 @@ class ContentModal(discord.ui.Modal, title="📝 タイトル・本文の編集"
 
     async def on_submit(self, interaction: discord.Interaction):
         self.builder.data["title"] = self.title_input.value
-        self.builder.data["description"] = self.body_input.value
+        self.builder.data["description"] = _auto_decorate(self.body_input.value)
         self.builder.data["footer"] = self.footer_input.value
         await self.builder._refresh(interaction)
 
@@ -431,7 +451,7 @@ class ForumPostModal(discord.ui.Modal, title="📋 フォーラム投稿を作�
             )
             return
 
-        body = self.post_body.value or ""
+        body = _auto_decorate(self.post_body.value or "")
         image = self.image_url.value.strip() if self.image_url.value else None
 
         # 本文末尾の画像URLを自動検出

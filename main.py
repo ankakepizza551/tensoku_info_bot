@@ -28,6 +28,7 @@ COGS = [
     "cogs.calendar_cog",
     "cogs.dice_cog",
     "cogs.pizza_cog",
+    "cogs.forum_recruit_cog",
 ]
 
 # インテントの設定
