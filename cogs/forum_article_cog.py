@@ -489,29 +489,65 @@ class ArticleControlView(discord.ui.View):
 
 
 # ─────────────────────────────────────────────
+#  フォーラム選択View（パネルボタン押下後）
+# ─────────────────────────────────────────────
+
+class ArticleChannelSelectView(discord.ui.View):
+    def __init__(self, author: discord.Member):
+        super().__init__(timeout=120)
+        self.author = author
+
+        self._select = discord.ui.ChannelSelect(
+            placeholder="投稿先のフォーラムチャンネルを選択...",
+            channel_types=[discord.ChannelType.forum],
+        )
+        self._select.callback = self._select_callback
+        self.add_item(self._select)
+
+    async def _select_callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.author.id:
+            await interaction.response.send_message("❌ 操作権限がありません。", ephemeral=True)
+            return
+
+        forum_channel = self._select.values[0]
+        view = ArticleBuilderView(
+            forum_channel_id=forum_channel.id,
+            author=interaction.user,
+        )
+        preview = view._build_embed(is_preview=True)
+
+        # エフェメラル選択UIを閉じてからビルダーを展開
+        await interaction.response.edit_message(
+            content=f"投稿先: {forum_channel.mention}",
+            view=None,
+        )
+        await interaction.followup.send(embed=preview, view=view)
+        self.stop()
+
+
+# ─────────────────────────────────────────────
 #  記事投稿パネルView（入口ボタン）
 # ─────────────────────────────────────────────
 
 class ArticlePanelView(discord.ui.View):
-    def __init__(self, forum_channel_id: int):
+    def __init__(self):
         super().__init__(timeout=None)
-        self.forum_channel_id = forum_channel_id
 
         btn = discord.ui.Button(
             label="📝 記事を投稿する",
             style=discord.ButtonStyle.primary,
-            custom_id=f"ap_panel:{forum_channel_id}",
+            custom_id="ap_panel",
         )
         btn.callback = self._btn_callback
         self.add_item(btn)
 
     async def _btn_callback(self, interaction: discord.Interaction):
-        view = ArticleBuilderView(
-            forum_channel_id=self.forum_channel_id,
-            author=interaction.user,
+        view = ArticleChannelSelectView(author=interaction.user)
+        await interaction.response.send_message(
+            "📝 投稿先のフォーラムチャンネルを選択してください：",
+            view=view,
+            ephemeral=True,
         )
-        preview = view._build_embed(is_preview=True)
-        await interaction.response.send_message(embed=preview, view=view)
 
 
 # ─────────────────────────────────────────────
@@ -525,7 +561,7 @@ class ForumArticleCog(commands.Cog):
     async def cog_load(self):
         panels = await db_manager.get_article_panels()
         for panel in panels:
-            view = ArticlePanelView(panel["forum_channel_id"])
+            view = ArticlePanelView()
             self.bot.add_view(view, message_id=panel["message_id"])
         if panels:
             logger.info(f"forum_article: 記事パネル {len(panels)} 件のViewを再登録")
@@ -547,36 +583,29 @@ class ForumArticleCog(commands.Cog):
         name="setup_article_panel",
         description="記事投稿ボタンのパネルをこのチャンネルに設置します（管理者用）",
     )
-    @app_commands.describe(forum_channel="記事の投稿先フォーラムチャンネル")
     @app_commands.default_permissions(manage_guild=True)
-    async def setup_article_panel(
-        self,
-        interaction: discord.Interaction,
-        forum_channel: discord.ForumChannel,
-    ):
+    async def setup_article_panel(self, interaction: discord.Interaction):
         embed = discord.Embed(
             title="📝 記事投稿",
             description=(
-                "下のボタンを押すと記事ビルダーが開きます。\n"
-                "タイトル・本文・画像・カラーをボタンで設定しながら\n"
-                f"プレビューを確認して {forum_channel.mention} に投稿できます。"
+                "下のボタンを押すと投稿先のフォーラムチャンネルを選択できます。\n"
+                "選択後にビルダーが開き、タイトル・本文・画像・カラーを\n"
+                "ボタンで設定しながらプレビューを確認して投稿できます。"
             ),
             color=discord.Color.from_rgb(52, 152, 219),
         )
-        embed.set_footer(text=f"投稿先: #{forum_channel.name}")
 
-        view = ArticlePanelView(forum_channel.id)
+        view = ArticlePanelView()
         await interaction.response.send_message(embed=embed, view=view)
         message = await interaction.original_response()
 
         await db_manager.add_article_panel(
             message_id=message.id,
             channel_id=interaction.channel_id,
-            forum_channel_id=forum_channel.id,
+            forum_channel_id=0,
         )
         logger.info(
-            f"setup_article_panel: message={message.id} "
-            f"channel={interaction.channel_id} forum={forum_channel.id}"
+            f"setup_article_panel: message={message.id} channel={interaction.channel_id}"
         )
 
     # ── /remove_article_panel ────────────────────
