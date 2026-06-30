@@ -204,6 +204,7 @@ async def init_db():
                 message_id INTEGER PRIMARY KEY,
                 channel_id INTEGER NOT NULL,
                 forum_channel_id INTEGER NOT NULL,
+                category_id INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -218,6 +219,13 @@ async def init_db():
             )
         """)
         await db.commit()
+
+        # article_panels に category_id カラムが存在しない場合は追加
+        async with db.execute("PRAGMA table_info(article_panels)") as cursor:
+            ap_columns = [row[1] for row in await cursor.fetchall()]
+        if "category_id" not in ap_columns:
+            await db.execute("ALTER TABLE article_panels ADD COLUMN category_id INTEGER")
+            await db.commit()
 
 async def get_or_create_user(user_id: int, username: str):
     """ユーザー情報を取得、なければ新規登録。ユーザー名が変わっている場合は更新"""
@@ -889,11 +897,17 @@ async def get_recruit_defaults(user_id: int) -> dict | None:
 
 # ── 記事投稿パネル ────────────────────────────────────────────────
 
-async def add_article_panel(message_id: int, channel_id: int, forum_channel_id: int) -> None:
+async def add_article_panel(
+    message_id: int,
+    channel_id: int,
+    forum_channel_id: int,
+    category_id: int | None = None,
+) -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "INSERT OR REPLACE INTO article_panels (message_id, channel_id, forum_channel_id) VALUES (?, ?, ?)",
-            (message_id, channel_id, forum_channel_id)
+            """INSERT OR REPLACE INTO article_panels
+               (message_id, channel_id, forum_channel_id, category_id) VALUES (?, ?, ?, ?)""",
+            (message_id, channel_id, forum_channel_id, category_id)
         )
         await db.commit()
 

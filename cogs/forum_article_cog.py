@@ -492,11 +492,22 @@ class ArticleControlView(discord.ui.View):
 #  フォーラム選択View（パネルボタン押下後）
 # ─────────────────────────────────────────────
 
+async def _open_builder(interaction: discord.Interaction, forum_channel_id: int) -> None:
+    """選択されたフォーラムのビルダーをチャンネルに展開する共通処理"""
+    view = ArticleBuilderView(forum_channel_id=forum_channel_id, author=interaction.user)
+    preview = view._build_embed(is_preview=True)
+    channel = interaction.guild.get_channel(forum_channel_id)
+    mention = channel.mention if channel else f"<#{forum_channel_id}>"
+    await interaction.response.edit_message(content=f"投稿先: {mention}", view=None)
+    await interaction.followup.send(embed=preview, view=view)
+
+
 class ArticleChannelSelectView(discord.ui.View):
+    """カテゴリー絞り込みなし：Discord ネイティブの ChannelSelect を使用"""
+
     def __init__(self, author: discord.Member):
         super().__init__(timeout=120)
         self.author = author
-
         self._select = discord.ui.ChannelSelect(
             placeholder="投稿先のフォーラムチャンネルを選択...",
             channel_types=[discord.ChannelType.forum],
@@ -508,20 +519,32 @@ class ArticleChannelSelectView(discord.ui.View):
         if interaction.user.id != self.author.id:
             await interaction.response.send_message("❌ 操作権限がありません。", ephemeral=True)
             return
+        await _open_builder(interaction, self._select.values[0].id)
+        self.stop()
 
-        forum_channel = self._select.values[0]
-        view = ArticleBuilderView(
-            forum_channel_id=forum_channel.id,
-            author=interaction.user,
-        )
-        preview = view._build_embed(is_preview=True)
 
-        # エフェメラル選択UIを閉じてからビルダーを展開
-        await interaction.response.edit_message(
-            content=f"投稿先: {forum_channel.mention}",
-            view=None,
+class ArticleFilteredSelectView(discord.ui.View):
+    """カテゴリー絞り込みあり：対象フォーラムのみ Select に列挙"""
+
+    def __init__(self, author: discord.Member, forums: list[discord.ForumChannel]):
+        super().__init__(timeout=120)
+        self.author = author
+        options = [
+            discord.SelectOption(label=f"# {ch.name}", value=str(ch.id))
+            for ch in forums[:25]
+        ]
+        self._select = discord.ui.Select(
+            placeholder="投稿先のフォーラムチャンネルを選択...",
+            options=options,
         )
-        await interaction.followup.send(embed=preview, view=view)
+        self._select.callback = self._select_callback
+        self.add_item(self._select)
+
+    async def _select_callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.author.id:
+            await interaction.response.send_message("❌ 操作権限がありません。", ephemeral=True)
+            return
+        await _open_builder(interaction, int(self._select.values[0]))
         self.stop()
 
 
@@ -530,8 +553,9 @@ class ArticleChannelSelectView(discord.ui.View):
 # ─────────────────────────────────────────────
 
 class ArticlePanelView(discord.ui.View):
-    def __init__(self):
+    def __init__(self, category_id: int | None = None):
         super().__init__(timeout=None)
+        self.category_id = category_id
 
         btn = discord.ui.Button(
             label="📝 記事を投稿する",
@@ -542,7 +566,20 @@ class ArticlePanelView(discord.ui.View):
         self.add_item(btn)
 
     async def _btn_callback(self, interaction: discord.Interaction):
-        view = ArticleChannelSelectView(author=interaction.user)
+        if self.category_id:
+            forums = [
+                ch for ch in interaction.guild.channels
+                if isinstance(ch, discord.ForumChannel) and ch.category_id == self.category_id
+            ]
+            if not forums:
+                await interaction.response.send_message(
+                    "❌ 指定カテゴリー内にフォーラムチャンネルが見つかりません。", ephemeral=True
+                )
+                return
+            view = ArticleFilteredSelectView(author=interaction.user, forums=forums)
+        else:
+            view = ArticleChannelSelectView(author=interaction.user)
+
         await interaction.response.send_message(
             "📝 投稿先のフォーラムチャンネルを選択してください：",
             view=view,
@@ -561,7 +598,7 @@ class ForumArticleCog(commands.Cog):
     async def cog_load(self):
         panels = await db_manager.get_article_panels()
         for panel in panels:
-            view = ArticlePanelView()
+            view = ArticlePanelView(category_id=panel.get("category_id"))
             self.bot.add_view(view, message_id=panel["message_id"])
         if panels:
             logger.info(f"forum_article: 記事パネル {len(panels)} 件のViewを再登録")
@@ -583,19 +620,29 @@ class ForumArticleCog(commands.Cog):
         name="setup_article_panel",
         description="記事投稿ボタンのパネルをこのチャンネルに設置します（管理者用）",
     )
+    @app_commands.describe(category="フォーラムを絞り込むカテゴリー（省略時は全フォーラムを表示）")
     @app_commands.default_permissions(manage_guild=True)
-    async def setup_article_panel(self, interaction: discord.Interaction):
+    async def setup_article_panel(
+        self,
+        interaction: discord.Interaction,
+        category: discord.CategoryChannel | None = None,
+    ):
+        category_id = category.id if category else None
+        desc = (
+            "下のボタンを押すと投稿先のフォーラムチャンネルを選択できます。\n"
+            "選択後にビルダーが開き、タイトル・本文・画像・カラーを\n"
+            "ボタンで設定しながらプレビューを確認して投稿できます。"
+        )
+        if category:
+            desc += f"\n表示フォーラム: **{category.name}** カテゴリーのみ"
+
         embed = discord.Embed(
             title="📝 記事投稿",
-            description=(
-                "下のボタンを押すと投稿先のフォーラムチャンネルを選択できます。\n"
-                "選択後にビルダーが開き、タイトル・本文・画像・カラーを\n"
-                "ボタンで設定しながらプレビューを確認して投稿できます。"
-            ),
+            description=desc,
             color=discord.Color.from_rgb(52, 152, 219),
         )
 
-        view = ArticlePanelView()
+        view = ArticlePanelView(category_id=category_id)
         await interaction.response.send_message(embed=embed, view=view)
         message = await interaction.original_response()
 
@@ -603,9 +650,11 @@ class ForumArticleCog(commands.Cog):
             message_id=message.id,
             channel_id=interaction.channel_id,
             forum_channel_id=0,
+            category_id=category_id,
         )
         logger.info(
-            f"setup_article_panel: message={message.id} channel={interaction.channel_id}"
+            f"setup_article_panel: message={message.id} "
+            f"channel={interaction.channel_id} category={category_id}"
         )
 
     # ── /remove_article_panel ────────────────────
