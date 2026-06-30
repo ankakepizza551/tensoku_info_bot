@@ -175,6 +175,17 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # 募集スレッドコントロールパネルテーブル
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS recruit_threads (
+                thread_id INTEGER PRIMARY KEY,
+                panel_message_id INTEGER NOT NULL,
+                recruiter_id INTEGER NOT NULL,
+                status TEXT DEFAULT 'recruiting',
+                challenger_id INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         await db.commit()
 
 async def get_or_create_user(user_id: int, username: str):
@@ -753,5 +764,55 @@ async def get_recruit_panels() -> list:
 async def delete_recruit_panel(message_id: int) -> bool:
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("DELETE FROM recruit_panels WHERE message_id = ?", (message_id,)) as cursor:
+            await db.commit()
+            return cursor.rowcount > 0
+
+# ── 募集スレッドコントロールパネル ───────────────────────────────
+
+async def add_recruit_thread(thread_id: int, panel_message_id: int, recruiter_id: int) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO recruit_threads (thread_id, panel_message_id, recruiter_id) VALUES (?, ?, ?)",
+            (thread_id, panel_message_id, recruiter_id)
+        )
+        await db.commit()
+
+async def get_recruit_thread(thread_id: int) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM recruit_threads WHERE thread_id = ?", (thread_id,)) as cursor:
+            row = await cursor.fetchone()
+        return dict(row) if row else None
+
+async def get_active_recruit_threads() -> list:
+    """recruiting / in_progress 状態のスレッドを取得（再起動時のView再登録用）"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM recruit_threads WHERE status != 'completed'"
+        ) as cursor:
+            return [dict(r) for r in await cursor.fetchall()]
+
+async def update_recruit_thread_status(
+    thread_id: int, status: str, challenger_id: int | None = None
+) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        if challenger_id is not None:
+            await db.execute(
+                "UPDATE recruit_threads SET status = ?, challenger_id = ? WHERE thread_id = ?",
+                (status, challenger_id, thread_id)
+            )
+        else:
+            await db.execute(
+                "UPDATE recruit_threads SET status = ? WHERE thread_id = ?",
+                (status, thread_id)
+            )
+        await db.commit()
+
+async def delete_recruit_thread(thread_id: int) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "DELETE FROM recruit_threads WHERE thread_id = ?", (thread_id,)
+        ) as cursor:
             await db.commit()
             return cursor.rowcount > 0
