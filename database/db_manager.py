@@ -172,7 +172,19 @@ async def init_db():
                 message_id INTEGER PRIMARY KEY,
                 channel_id INTEGER NOT NULL,
                 forum_channel_id INTEGER NOT NULL,
+                notify_channel_id INTEGER,
+                mention_role_id INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        # 募集入力デフォルト値テーブル
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS recruit_defaults (
+                user_id INTEGER PRIMARY KEY,
+                connection_type TEXT NOT NULL,
+                match_settings TEXT NOT NULL,
+                character TEXT DEFAULT '',
+                comment TEXT DEFAULT ''
             )
         """)
         # 募集スレッドコントロールパネルテーブル
@@ -747,11 +759,19 @@ async def delete_pizza(pizza_id: int) -> bool:
 
 # ── 対戦募集パネル ────────────────────────────────────────────────
 
-async def add_recruit_panel(message_id: int, channel_id: int, forum_channel_id: int) -> None:
+async def add_recruit_panel(
+    message_id: int,
+    channel_id: int,
+    forum_channel_id: int,
+    notify_channel_id: int | None = None,
+    mention_role_id: int | None = None,
+) -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "INSERT OR REPLACE INTO recruit_panels (message_id, channel_id, forum_channel_id) VALUES (?, ?, ?)",
-            (message_id, channel_id, forum_channel_id)
+            """INSERT OR REPLACE INTO recruit_panels
+               (message_id, channel_id, forum_channel_id, notify_channel_id, mention_role_id)
+               VALUES (?, ?, ?, ?, ?)""",
+            (message_id, channel_id, forum_channel_id, notify_channel_id, mention_role_id)
         )
         await db.commit()
 
@@ -816,3 +836,34 @@ async def delete_recruit_thread(thread_id: int) -> bool:
         ) as cursor:
             await db.commit()
             return cursor.rowcount > 0
+
+# ── 募集入力デフォルト値 ──────────────────────────────────────────
+
+async def save_recruit_defaults(
+    user_id: int,
+    connection_type: str,
+    match_settings: str,
+    character: str,
+    comment: str,
+) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT INTO recruit_defaults (user_id, connection_type, match_settings, character, comment)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(user_id) DO UPDATE SET
+               connection_type=excluded.connection_type,
+               match_settings=excluded.match_settings,
+               character=excluded.character,
+               comment=excluded.comment""",
+            (user_id, connection_type, match_settings, character, comment),
+        )
+        await db.commit()
+
+async def get_recruit_defaults(user_id: int) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM recruit_defaults WHERE user_id = ?", (user_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        return dict(row) if row else None

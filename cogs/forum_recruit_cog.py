@@ -432,43 +432,61 @@ class ThreadCompletedView(discord.ui.View):
 #  募集モーダル
 # ─────────────────────────────────────────────
 
-class RecruitForumModal(discord.ui.Modal, title="⚔️ 対戦募集を投稿"):
-    thread_title = discord.ui.TextInput(
-        label="タイトル（必須）",
-        placeholder="例: 先三募集中！気軽にどうぞ",
-        required=True,
-        max_length=100,
-    )
-    connection_type = discord.ui.TextInput(
-        label="IP or クラ専（必須）",
-        placeholder="例: IP / クラ専",
-        required=True,
-        max_length=20,
-    )
-    match_settings = discord.ui.TextInput(
-        label="対戦設定（必須）",
-        style=discord.TextStyle.paragraph,
-        placeholder="autopunch: あり\nソクロ: なし\ngiu: あり",
-        required=True,
-        max_length=200,
-    )
-    character = discord.ui.TextInput(
-        label="使用キャラ（任意）",
-        placeholder="例: 霊夢、魔理沙",
-        required=False,
-        max_length=50,
-    )
-    comment = discord.ui.TextInput(
-        label="対戦回数 / その他コメント（任意）",
-        style=discord.TextStyle.paragraph,
-        placeholder="例: 3回くらい / 初心者歓迎です！",
-        required=False,
-        max_length=400,
-    )
-
-    def __init__(self, forum_channel_id: int):
-        super().__init__()
+class RecruitForumModal(discord.ui.Modal):
+    def __init__(
+        self,
+        forum_channel_id: int,
+        notify_channel_id: int | None = None,
+        mention_role_id: int | None = None,
+        defaults: dict | None = None,
+    ):
+        super().__init__(title="⚔️ 対戦募集を投稿")
         self.forum_channel_id = forum_channel_id
+        self.notify_channel_id = notify_channel_id
+        self.mention_role_id = mention_role_id
+        d = defaults or {}
+
+        self.thread_title = discord.ui.TextInput(
+            label="タイトル（必須）",
+            placeholder="例: 先三募集中！気軽にどうぞ",
+            required=True,
+            max_length=100,
+        )
+        self.connection_type = discord.ui.TextInput(
+            label="IP or クラ専（必須）",
+            placeholder="例: IP / クラ専",
+            default=d.get("connection_type", ""),
+            required=True,
+            max_length=20,
+        )
+        self.match_settings = discord.ui.TextInput(
+            label="対戦設定（必須）",
+            style=discord.TextStyle.paragraph,
+            placeholder="autopunch: あり\nソクロ: なし\ngiu: あり",
+            default=d.get("match_settings", ""),
+            required=True,
+            max_length=200,
+        )
+        self.character = discord.ui.TextInput(
+            label="使用キャラ（任意）",
+            placeholder="例: 霊夢、魔理沙",
+            default=d.get("character", ""),
+            required=False,
+            max_length=50,
+        )
+        self.comment = discord.ui.TextInput(
+            label="対戦回数 / その他コメント（任意）",
+            style=discord.TextStyle.paragraph,
+            placeholder="例: 3回くらい / 初心者歓迎です！",
+            default=d.get("comment", ""),
+            required=False,
+            max_length=400,
+        )
+        self.add_item(self.thread_title)
+        self.add_item(self.connection_type)
+        self.add_item(self.match_settings)
+        self.add_item(self.character)
+        self.add_item(self.comment)
 
     async def on_submit(self, interaction: discord.Interaction):
         forum_channel = interaction.guild.get_channel(self.forum_channel_id)
@@ -543,6 +561,27 @@ class RecruitForumModal(discord.ui.Modal, title="⚔️ 対戦募集を投稿"):
                 recruiter_id=interaction.user.id,
             )
 
+            # 次回のために入力内容を保存
+            await db_manager.save_recruit_defaults(
+                user_id=interaction.user.id,
+                connection_type=conn,
+                match_settings=settings,
+                character=self.character.value.strip(),
+                comment=self.comment.value.strip(),
+            )
+
+            # 通知チャンネルにメンション付きで告知
+            if self.notify_channel_id:
+                notify_ch = interaction.guild.get_channel(self.notify_channel_id)
+                if isinstance(notify_ch, discord.TextChannel):
+                    mention = f"<@&{self.mention_role_id}> " if self.mention_role_id else ""
+                    await notify_ch.send(
+                        f"{mention}対戦募集が投稿されました！\n"
+                        f"**{self.thread_title.value}**\n"
+                        f"募集者: {interaction.user.mention} / 接続: {conn}\n"
+                        f"→ {thread.mention}"
+                    )
+
             logger.info(
                 f"forum_recruit: user={interaction.user.id} "
                 f"forum={forum_channel.id} thread={thread.id} panel={panel_msg.id}"
@@ -575,9 +614,16 @@ class RecruitForumModal(discord.ui.Modal, title="⚔️ 対戦募集を投稿"):
 class RecruitForumPanelView(discord.ui.View):
     """Bot再起動後もボタンが機能するよう timeout=None で定義"""
 
-    def __init__(self, forum_channel_id: int):
+    def __init__(
+        self,
+        forum_channel_id: int,
+        notify_channel_id: int | None = None,
+        mention_role_id: int | None = None,
+    ):
         super().__init__(timeout=None)
         self.forum_channel_id = forum_channel_id
+        self.notify_channel_id = notify_channel_id
+        self.mention_role_id = mention_role_id
 
         btn = discord.ui.Button(
             label="⚔️ 対戦を募集する",
@@ -588,7 +634,15 @@ class RecruitForumPanelView(discord.ui.View):
         self.add_item(btn)
 
     async def _btn_callback(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(RecruitForumModal(self.forum_channel_id))
+        defaults = await db_manager.get_recruit_defaults(interaction.user.id)
+        await interaction.response.send_modal(
+            RecruitForumModal(
+                forum_channel_id=self.forum_channel_id,
+                notify_channel_id=self.notify_channel_id,
+                mention_role_id=self.mention_role_id,
+                defaults=defaults,
+            )
+        )
 
 
 # ─────────────────────────────────────────────
@@ -604,7 +658,11 @@ class ForumRecruitCog(commands.Cog):
         # 募集パネル（入口ボタン）の復元
         panels = await db_manager.get_recruit_panels()
         for panel in panels:
-            view = RecruitForumPanelView(panel["forum_channel_id"])
+            view = RecruitForumPanelView(
+                forum_channel_id=panel["forum_channel_id"],
+                notify_channel_id=panel.get("notify_channel_id"),
+                mention_role_id=panel.get("mention_role_id"),
+            )
             self.bot.add_view(view, message_id=panel["message_id"])
         if panels:
             logger.info(f"forum_recruit: 募集パネル {len(panels)} 件のViewを再登録")
@@ -638,24 +696,37 @@ class ForumRecruitCog(commands.Cog):
         name="setup_recruit_panel",
         description="対戦募集ボタンのパネルをこのチャンネルに設置します（管理者用）",
     )
-    @app_commands.describe(forum_channel="募集投稿の作成先フォーラムチャンネル")
+    @app_commands.describe(
+        forum_channel="募集投稿の作成先フォーラムチャンネル",
+        notify_channel="新規募集時にメンションを送る通知チャンネル（省略可）",
+        mention_role="通知時にメンションするロール（省略可）",
+    )
     @app_commands.default_permissions(manage_guild=True)
     async def setup_recruit_panel(
         self,
         interaction: discord.Interaction,
         forum_channel: discord.ForumChannel,
+        notify_channel: discord.TextChannel | None = None,
+        mention_role: discord.Role | None = None,
     ):
+        notify_channel_id = notify_channel.id if notify_channel else None
+        mention_role_id = mention_role.id if mention_role else None
+
+        desc = (
+            "下のボタンを押すと対戦募集フォームが開きます。\n"
+            f"入力した内容は {forum_channel.mention} に新規投稿されます。"
+        )
+        if notify_channel:
+            desc += f"\n新規募集時は {notify_channel.mention} に通知されます。"
+
         embed = discord.Embed(
             title="⚔️ 対戦募集",
-            description=(
-                "下のボタンを押すと対戦募集フォームが開きます。\n"
-                f"入力した内容は {forum_channel.mention} に新規投稿されます。"
-            ),
+            description=desc,
             color=discord.Color.from_rgb(52, 152, 219),
         )
         embed.set_footer(text=f"投稿先: #{forum_channel.name}")
 
-        view = RecruitForumPanelView(forum_channel.id)
+        view = RecruitForumPanelView(forum_channel.id, notify_channel_id, mention_role_id)
         await interaction.response.send_message(embed=embed, view=view)
         message = await interaction.original_response()
 
@@ -663,10 +734,13 @@ class ForumRecruitCog(commands.Cog):
             message_id=message.id,
             channel_id=interaction.channel_id,
             forum_channel_id=forum_channel.id,
+            notify_channel_id=notify_channel_id,
+            mention_role_id=mention_role_id,
         )
         logger.info(
             f"setup_recruit_panel: message={message.id} "
-            f"channel={interaction.channel_id} forum={forum_channel.id}"
+            f"channel={interaction.channel_id} forum={forum_channel.id} "
+            f"notify={notify_channel_id} role={mention_role_id}"
         )
 
     # ── /remove_recruit_panel ────────────────────
