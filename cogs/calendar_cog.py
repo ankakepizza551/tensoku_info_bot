@@ -94,9 +94,200 @@ class CalendarView(discord.ui.View):
         await self._refresh(interaction, y, m)
 
 
+# ─────────────────────────────────────────────
+#  イベント追加モーダル
+# ─────────────────────────────────────────────
+
+class AddEventModal(discord.ui.Modal):
+    def __init__(self, event_type: str):
+        label = "🟢 オン大会を追加" if event_type == "online" else "🔴 オフ大会を追加"
+        super().__init__(title=label)
+        self.event_type = event_type
+
+        self.date_input = discord.ui.TextInput(
+            label="日付（必須）",
+            placeholder="例: 2026-07-15 または 2026/07/15",
+            required=True,
+            max_length=10,
+        )
+        self.name_input = discord.ui.TextInput(
+            label="大会名（必須）",
+            placeholder="例: 第○回天則杯",
+            required=True,
+            max_length=100,
+        )
+        self.time_input = discord.ui.TextInput(
+            label="開始時間（省略可）",
+            placeholder="例: 14:00",
+            required=False,
+            max_length=5,
+        )
+        self.location_input = discord.ui.TextInput(
+            label="場所（省略可）",
+            placeholder="例: オンライン / ○○会館",
+            required=False,
+            max_length=100,
+        )
+        self.url_input = discord.ui.TextInput(
+            label="詳細URL（省略可）",
+            placeholder="https://...",
+            required=False,
+            max_length=200,
+        )
+        self.add_item(self.date_input)
+        self.add_item(self.name_input)
+        self.add_item(self.time_input)
+        self.add_item(self.location_input)
+        self.add_item(self.url_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        parsed_date = None
+        for fmt in ("%Y-%m-%d", "%Y/%m/%d"):
+            try:
+                parsed_date = datetime.datetime.strptime(self.date_input.value.strip(), fmt)
+                break
+            except ValueError:
+                continue
+        if not parsed_date:
+            await interaction.response.send_message(
+                "❌ 日付の形式が正しくありません。`YYYY-MM-DD` の形式で入力してください。", ephemeral=True
+            )
+            return
+
+        time_val = self.time_input.value.strip() or None
+        if time_val:
+            try:
+                datetime.datetime.strptime(time_val, "%H:%M")
+            except ValueError:
+                await interaction.response.send_message(
+                    "❌ 時間の形式が正しくありません。`HH:MM` の形式で入力してください。", ephemeral=True
+                )
+                return
+
+        date_str = parsed_date.strftime("%Y-%m-%d")
+        await db.add_event(
+            guild_id=interaction.guild_id,
+            date=date_str,
+            name=self.name_input.value.strip(),
+            type=self.event_type,
+            time=time_val,
+            location=self.location_input.value.strip() or None,
+            url=self.url_input.value.strip() or None,
+        )
+
+        cog = interaction.client.cogs.get("CalendarCog")
+        if cog:
+            await cog._refresh_calendar(interaction.guild_id)
+
+        icon = "🟢" if self.event_type == "online" else "🔴"
+        await interaction.response.send_message(
+            f"✅ {icon} **{date_str} {self.name_input.value.strip()}** を追加しました。", ephemeral=True
+        )
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
+        if not interaction.response.is_done():
+            await interaction.response.send_message("❌ エラーが発生しました。", ephemeral=True)
+
+
+# ─────────────────────────────────────────────
+#  イベント削除セレクトView
+# ─────────────────────────────────────────────
+
+class RemoveEventSelectView(discord.ui.View):
+    def __init__(self, events: list, guild_id: int):
+        super().__init__(timeout=60)
+        self.guild_id = guild_id
+
+        options = []
+        for e in events[:25]:
+            icon = "🟢" if e["type"] == "online" else "🔴"
+            label = f"{e['date']} {e['name']}"
+            options.append(discord.SelectOption(
+                label=label[:100],
+                value=str(e["event_id"]),
+                emoji=icon,
+            ))
+
+        self._select = discord.ui.Select(
+            placeholder="削除するイベントを選択...",
+            options=options,
+        )
+        self._select.callback = self._select_callback
+        self.add_item(self._select)
+
+    async def _select_callback(self, interaction: discord.Interaction):
+        event_id = int(self._select.values[0])
+        success = await db.delete_event(event_id, self.guild_id)
+        if not success:
+            await interaction.response.edit_message(content="❌ 削除に失敗しました。", view=None)
+            return
+
+        cog = interaction.client.cogs.get("CalendarCog")
+        if cog:
+            await cog._refresh_calendar(self.guild_id)
+
+        await interaction.response.edit_message(content="✅ イベントを削除しました。", view=None)
+        self.stop()
+
+
+# ─────────────────────────────────────────────
+#  カレンダー管理パネルView
+# ─────────────────────────────────────────────
+
+class CalendarManagePanelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+        add_online = discord.ui.Button(
+            label="🟢 オン大会を追加",
+            style=discord.ButtonStyle.success,
+            custom_id="cal_add_online",
+        )
+        add_online.callback = self._add_online
+
+        add_offline = discord.ui.Button(
+            label="🔴 オフ大会を追加",
+            style=discord.ButtonStyle.danger,
+            custom_id="cal_add_offline",
+        )
+        add_offline.callback = self._add_offline
+
+        remove = discord.ui.Button(
+            label="🗑️ イベントを削除",
+            style=discord.ButtonStyle.secondary,
+            custom_id="cal_remove",
+        )
+        remove.callback = self._remove
+
+        self.add_item(add_online)
+        self.add_item(add_offline)
+        self.add_item(remove)
+
+    async def _add_online(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(AddEventModal("online"))
+
+    async def _add_offline(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(AddEventModal("offline"))
+
+    async def _remove(self, interaction: discord.Interaction):
+        events = await db.get_events(interaction.guild_id)
+        if not events:
+            await interaction.response.send_message(
+                "❌ 削除できるイベントがありません。", ephemeral=True
+            )
+            return
+        view = RemoveEventSelectView(events, interaction.guild_id)
+        await interaction.response.send_message(
+            "🗑️ 削除するイベントを選択してください：", view=view, ephemeral=True
+        )
+
+
 class CalendarCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+
+    async def cog_load(self):
+        self.bot.add_view(CalendarManagePanelView())
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -153,6 +344,22 @@ class CalendarCog(commands.Cog):
         await interaction.followup.send(
             f"✅ カレンダーを {target.mention} に設置しました！", ephemeral=True
         )
+
+    @app_commands.command(name="setup_event_panel", description="イベント追加・削除パネルをこのチャンネルに設置します（管理者用）")
+    @app_commands.default_permissions(manage_guild=True)
+    async def setup_event_panel(self, interaction: discord.Interaction):
+        embed = discord.Embed(
+            title="📅 イベント管理",
+            description=(
+                "🟢 **オン大会を追加** / 🔴 **オフ大会を追加**\n"
+                "　→ 日付・大会名・時間・場所・URLを入力してカレンダーに追加\n\n"
+                "🗑️ **イベントを削除**\n"
+                "　→ 登録済みイベントの一覧から選択して削除"
+            ),
+            color=discord.Color.from_rgb(52, 152, 219),
+        )
+        view = CalendarManagePanelView()
+        await interaction.response.send_message(embed=embed, view=view)
 
     @app_commands.command(name="add_event", description="カレンダーにイベントを追加します")
     @app_commands.describe(
