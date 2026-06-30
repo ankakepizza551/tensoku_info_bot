@@ -22,11 +22,18 @@ class RecruitForumModal(discord.ui.Modal, title="⚔️ 対戦募集を投稿"):
         required=True,
         max_length=100,
     )
-    match_format = discord.ui.TextInput(
-        label="対戦形式（任意）",
-        placeholder="例: 先三、先二、フリーなど",
-        required=False,
-        max_length=50,
+    connection_type = discord.ui.TextInput(
+        label="IP or クラ専（必須）",
+        placeholder="例: IP / クラ専",
+        required=True,
+        max_length=20,
+    )
+    match_settings = discord.ui.TextInput(
+        label="対戦設定（必須）",
+        style=discord.TextStyle.paragraph,
+        placeholder="autopunch: あり\nソクロ: なし\ngiu: あり",
+        required=True,
+        max_length=200,
     )
     character = discord.ui.TextInput(
         label="使用キャラ（任意）",
@@ -35,11 +42,11 @@ class RecruitForumModal(discord.ui.Modal, title="⚔️ 対戦募集を投稿"):
         max_length=50,
     )
     comment = discord.ui.TextInput(
-        label="コメント（任意）",
+        label="対戦回数 / その他コメント（任意）",
         style=discord.TextStyle.paragraph,
-        placeholder="条件や一言コメントなど",
+        placeholder="例: 3回くらい / 初心者歓迎です！",
         required=False,
-        max_length=500,
+        max_length=400,
     )
 
     def __init__(self, forum_channel_id: int):
@@ -64,7 +71,8 @@ class RecruitForumModal(discord.ui.Modal, title="⚔️ 対戦募集を投稿"):
             )
             return
 
-        fmt = self.match_format.value.strip() or "未指定"
+        conn = self.connection_type.value.strip()
+        settings = self.match_settings.value.strip()
         char = self.character.value.strip() or "未指定"
         comment_val = self.comment.value.strip() or "特になし"
 
@@ -74,9 +82,10 @@ class RecruitForumModal(discord.ui.Modal, title="⚔️ 対戦募集を投稿"):
             color=discord.Color.from_rgb(52, 152, 219),
         )
         embed.set_thumbnail(url=interaction.user.display_avatar.url)
-        embed.add_field(name="対戦形式", value=fmt, inline=True)
+        embed.add_field(name="接続方式", value=conn, inline=True)
         embed.add_field(name="使用キャラ", value=char, inline=True)
-        embed.add_field(name="コメント", value=comment_val, inline=False)
+        embed.add_field(name="対戦設定", value=f"```{settings}```", inline=False)
+        embed.add_field(name="対戦回数 / コメント", value=comment_val, inline=False)
         embed.set_footer(
             text=f"募集者: {interaction.user.display_name}",
             icon_url=interaction.user.display_avatar.url,
