@@ -227,6 +227,16 @@ async def init_db():
             await db.execute("ALTER TABLE article_panels ADD COLUMN category_id INTEGER")
             await db.commit()
 
+        # ウェルカムメッセージ設定テーブル（参加認証完了後に送信）
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS welcome_settings (
+                guild_id INTEGER PRIMARY KEY,
+                channel_id INTEGER NOT NULL,
+                message TEXT NOT NULL
+            )
+        """)
+        await db.commit()
+
 async def get_or_create_user(user_id: int, username: str):
     """ユーザー情報を取得、なければ新規登録。ユーザー名が変わっている場合は更新"""
     async with aiosqlite.connect(DB_PATH) as db:
@@ -743,6 +753,37 @@ async def update_calendar_display(guild_id: int, year: int, month: int) -> None:
             (year, month, guild_id)
         )
         await db.commit()
+
+# ── ウェルカムメッセージ設定 ─────────────────────────────────────────
+
+async def set_welcome_settings(guild_id: int, channel_id: int, message: str) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT INTO welcome_settings (guild_id, channel_id, message)
+               VALUES (?, ?, ?)
+               ON CONFLICT(guild_id) DO UPDATE SET
+               channel_id=excluded.channel_id,
+               message=excluded.message""",
+            (guild_id, channel_id, message)
+        )
+        await db.commit()
+
+async def get_welcome_settings(guild_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM welcome_settings WHERE guild_id = ?", (guild_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+async def delete_welcome_settings(guild_id: int) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "DELETE FROM welcome_settings WHERE guild_id = ?", (guild_id,)
+        ) as cursor:
+            await db.commit()
+            return cursor.rowcount > 0
 
 async def close_survey(survey_id: str) -> None:
     """アンケートを締め切る"""
