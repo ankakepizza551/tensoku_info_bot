@@ -545,6 +545,64 @@ class PollCog(commands.Cog):
             embed=result_embed,
         )
 
+    # ── /poll_refresh ────────────────────────────────────────
+
+    @app_commands.command(
+        name="poll_refresh",
+        description="投票アンケートの表示を最新の状態に更新します（作成者またはサーバー管理者のみ）",
+    )
+    @app_commands.describe(message_id="更新する投票メッセージのID")
+    async def poll_refresh(self, interaction: discord.Interaction, message_id: str):
+        poll = await db.get_poll(message_id)
+        if not poll:
+            await interaction.response.send_message(
+                "❌ 指定されたIDの投票アンケートが見つかりません。", ephemeral=True
+            )
+            return
+
+        is_creator = poll["creator_id"] == interaction.user.id
+        is_admin = interaction.user.guild_permissions.manage_guild
+        if not is_creator and not is_admin:
+            await interaction.response.send_message(
+                "❌ 更新できるのは作成者またはサーバー管理者のみです。", ephemeral=True
+            )
+            return
+
+        if not poll["is_active"]:
+            await interaction.response.send_message(
+                "⚠️ このアンケートはすでに終了しています。", ephemeral=True
+            )
+            return
+
+        options = json.loads(poll["options"])
+        vote_rows = await db.get_poll_votes(message_id)
+        is_anonymous = bool(poll["is_anonymous"]) if "is_anonymous" in poll.keys() else True
+        voter_names = None if is_anonymous else build_voter_names(vote_rows, options, self.bot)
+        embed = build_poll_embed(
+            question=poll["question"],
+            options=options,
+            vote_rows=vote_rows,
+            is_active=True,
+            allow_multiple=bool(poll["allow_multiple"]),
+            deadline=poll["deadline"],
+            voter_names_per_option=voter_names,
+        )
+
+        try:
+            ch = self.bot.get_channel(poll["channel_id"])
+            if ch:
+                msg = await ch.fetch_message(int(message_id))
+                await msg.edit(embed=embed)
+        except Exception:
+            await interaction.response.send_message(
+                "❌ メッセージの更新に失敗しました。", ephemeral=True
+            )
+            return
+
+        await interaction.response.send_message(
+            "✅ 投票アンケートの表示を更新しました。", ephemeral=True
+        )
+
     # ── /survey ──────────────────────────────────────────────
 
     @app_commands.command(
