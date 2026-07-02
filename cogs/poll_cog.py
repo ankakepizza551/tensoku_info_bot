@@ -128,6 +128,8 @@ class PollButton(discord.ui.Button):
             toggled = await db.set_single_poll_vote(self.poll_id, interaction.user.id, self.option_index)
 
         vote_rows = await db.get_poll_votes(self.poll_id)
+        is_anonymous = bool(poll["is_anonymous"]) if "is_anonymous" in poll.keys() else True
+        voter_names = None if is_anonymous else build_voter_names(vote_rows, options, interaction.client)
         embed = build_poll_embed(
             question=poll["question"],
             options=options,
@@ -135,6 +137,7 @@ class PollButton(discord.ui.Button):
             is_active=True,
             allow_multiple=allow_multiple,
             deadline=deadline,
+            voter_names_per_option=voter_names,
         )
         await interaction.response.edit_message(embed=embed, view=self.view)
 
