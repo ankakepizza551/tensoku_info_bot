@@ -177,6 +177,17 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        await db.commit()
+
+        # recruit_panels テーブルに notify_channel_id, mention_role_id が存在しない場合は追加
+        async with db.execute("PRAGMA table_info(recruit_panels)") as cursor:
+            columns = [row[1] for row in await cursor.fetchall()]
+        if "notify_channel_id" not in columns:
+            await db.execute("ALTER TABLE recruit_panels ADD COLUMN notify_channel_id INTEGER")
+        if "mention_role_id" not in columns:
+            await db.execute("ALTER TABLE recruit_panels ADD COLUMN mention_role_id INTEGER")
+        await db.commit()
+
         # 募集入力デフォルト値テーブル
         await db.execute("""
             CREATE TABLE IF NOT EXISTS recruit_defaults (
