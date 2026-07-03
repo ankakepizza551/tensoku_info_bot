@@ -774,21 +774,30 @@ class ForumRecruitCog(commands.Cog):
             )
             return
 
-        deleted = await db_manager.delete_recruit_panel(mid)
-        if not deleted:
-            await interaction.response.send_message(
+        # DB・メッセージ削除より先に応答を確定させ、3秒タイムアウトによる失敗を避ける
+        await interaction.response.defer(ephemeral=True)
+
+        deleted_from_db = await db_manager.delete_recruit_panel(mid)
+
+        message_deleted = False
+        try:
+            msg = await interaction.channel.fetch_message(mid)
+            await msg.delete()
+            message_deleted = True
+        except (discord.NotFound, discord.Forbidden):
+            pass
+
+        if not deleted_from_db and not message_deleted:
+            await interaction.followup.send(
                 "❌ 指定されたIDのパネルが見つかりませんでした。", ephemeral=True
             )
             return
 
-        try:
-            msg = await interaction.channel.fetch_message(mid)
-            await msg.delete()
-        except (discord.NotFound, discord.Forbidden):
-            pass
-
-        await interaction.response.send_message("✅ 対戦募集パネルを削除しました。", ephemeral=True)
-        logger.info(f"remove_recruit_panel: message={mid} by user={interaction.user.id}")
+        await interaction.followup.send("✅ 対戦募集パネルを削除しました。", ephemeral=True)
+        logger.info(
+            f"remove_recruit_panel: message={mid} by user={interaction.user.id} "
+            f"db={deleted_from_db} msg={message_deleted}"
+        )
 
 
 async def setup(bot: commands.Bot):
