@@ -149,11 +149,66 @@ class PollButton(discord.ui.Button):
         await interaction.followup.send(action, ephemeral=True)
 
 
+class PollCancelButton(discord.ui.Button):
+    def __init__(self, poll_id: str):
+        super().__init__(
+            style=discord.ButtonStyle.secondary,
+            label="投票を取り消す",
+            emoji="🗑️",
+            custom_id=f"poll_cancel_{poll_id}",
+            row=4,
+        )
+        self.poll_id = poll_id
+
+    async def callback(self, interaction: discord.Interaction):
+        poll = await db.get_poll(self.poll_id)
+        if not poll or not poll["is_active"]:
+            await interaction.response.send_message(
+                "⚠️ このアンケートはすでに終了しています。", ephemeral=True
+            )
+            return
+
+        # 期限チェック
+        deadline = poll["deadline"]
+        if deadline:
+            now_str = datetime.datetime.now(JST).strftime("%Y-%m-%d %H:%M")
+            if now_str >= deadline:
+                await db.close_poll(self.poll_id)
+                await interaction.response.send_message(
+                    "⚠️ このアンケートの期限が過ぎています。", ephemeral=True
+                )
+                return
+
+        removed = await db.clear_poll_votes(self.poll_id, interaction.user.id)
+        if removed == 0:
+            await interaction.response.send_message(
+                "ℹ️ まだこのアンケートに投票していません。", ephemeral=True
+            )
+            return
+
+        options = json.loads(poll["options"])
+        vote_rows = await db.get_poll_votes(self.poll_id)
+        is_anonymous = bool(poll["is_anonymous"]) if "is_anonymous" in poll.keys() else True
+        voter_names = None if is_anonymous else build_voter_names(vote_rows, options, interaction.client)
+        embed = build_poll_embed(
+            question=poll["question"],
+            options=options,
+            vote_rows=vote_rows,
+            is_active=True,
+            allow_multiple=bool(poll["allow_multiple"]),
+            deadline=deadline,
+            voter_names_per_option=voter_names,
+        )
+        await interaction.response.edit_message(embed=embed, view=self.view)
+        await interaction.followup.send("↩️ 投票をすべて取り消しました。", ephemeral=True)
+
+
 class PollView(discord.ui.View):
     def __init__(self, poll_id: str, options: list[str]):
         super().__init__(timeout=None)
         for i, option in enumerate(options):
             self.add_item(PollButton(poll_id=poll_id, option_index=i, label=option))
+        self.add_item(PollCancelButton(poll_id=poll_id))
 
 
 # ──────────────────────────────────────────────────────────────

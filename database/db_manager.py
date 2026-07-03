@@ -604,6 +604,16 @@ async def set_single_poll_vote(poll_id: str, user_id: int, option_index: int) ->
         await db.commit()
         return not already_voted_same
 
+async def clear_poll_votes(poll_id: str, user_id: int) -> int:
+    """指定ユーザーのそのアンケートへの投票をすべて取り消す。削除件数を返す"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "DELETE FROM poll_votes WHERE poll_id = ? AND user_id = ?",
+            (poll_id, user_id)
+        )
+        await db.commit()
+        return cursor.rowcount
+
 async def get_expired_polls() -> list:
     """期限切れかつアクティブな投票アンケートを全件取得する"""
     import datetime
