@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 import discord
@@ -77,6 +78,9 @@ async def _delete_callback(interaction: discord.Interaction):
         await interaction.response.send_message("❌ エラーが発生しました。", ephemeral=True)
         return
 
+    # DB読み込みより先に応答を確定させ、3秒タイムアウトによる失敗を避ける
+    await interaction.response.defer(ephemeral=True)
+
     thread_info = await db_manager.get_recruit_thread(thread_id)
     recruiter_id = thread_info["recruiter_id"] if thread_info else None
 
@@ -84,12 +88,10 @@ async def _delete_callback(interaction: discord.Interaction):
     has_manage = interaction.user.guild_permissions.manage_threads
 
     if not is_creator and not has_manage:
-        await interaction.response.send_message(
+        await interaction.followup.send(
             "❌ スレッド作成者またはモデレーターのみ削除できます。", ephemeral=True
         )
         return
-
-    await interaction.response.defer(ephemeral=True)
 
     thread = interaction.channel
     if not isinstance(thread, discord.Thread):
@@ -301,10 +303,6 @@ class ThreadRecruitingView(discord.ui.View):
             return
 
         challenger = interaction.user
-        await db_manager.update_recruit_thread_status(
-            self.thread_id, "in_progress", challenger_id=challenger.id
-        )
-
         recruiter = interaction.guild.get_member(self.recruiter_id)
         recruiter_mention = recruiter.mention if recruiter else f"<@{self.recruiter_id}>"
 
@@ -318,6 +316,10 @@ class ThreadRecruitingView(discord.ui.View):
         )
         in_progress_view = ThreadInProgressView(self.thread_id, self.recruiter_id, challenger.id)
         await interaction.response.edit_message(embed=in_progress_embed, view=in_progress_view)
+
+        await db_manager.update_recruit_thread_status(
+            self.thread_id, "in_progress", challenger_id=challenger.id
+        )
 
         await interaction.channel.send(
             f"⚔️ 対戦開始: {recruiter_mention} vs {challenger.mention} ！\n"
@@ -634,7 +636,15 @@ class RecruitForumPanelView(discord.ui.View):
         self.add_item(btn)
 
     async def _btn_callback(self, interaction: discord.Interaction):
-        defaults = await db_manager.get_recruit_defaults(interaction.user.id)
+        # send_modal は defer できず3秒以内に直接応答する必要があるため、
+        # DB読み込みが遅延してもモーダル表示自体は失敗しないようにタイムアウトを設ける
+        try:
+            defaults = await asyncio.wait_for(
+                db_manager.get_recruit_defaults(interaction.user.id), timeout=2.0
+            )
+        except Exception as e:
+            logger.warning(f"get_recruit_defaults 取得失敗（デフォルト値なしで続行）: {e}")
+            defaults = None
         await interaction.response.send_modal(
             RecruitForumModal(
                 forum_channel_id=self.forum_channel_id,
