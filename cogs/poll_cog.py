@@ -374,6 +374,182 @@ class SurveyCreateModal(discord.ui.Modal, title="アンケートを作成"):
         )
 
 
+# ──────────────────────────────────────────────────────────────
+# 作成パネル（ボタンからアンケートを作成）
+# ──────────────────────────────────────────────────────────────
+
+def _parse_bool(text: str, default: bool = True) -> bool:
+    """「はい/いいえ」形式のテキストをboolに変換する"""
+    value = text.strip()
+    if not value:
+        return default
+    return value not in ("いいえ", "no", "No", "NO", "0", "false", "False")
+
+
+class PollCreateModal(discord.ui.Modal, title="投票アンケートを作成"):
+    question_field = discord.ui.TextInput(
+        label="質問",
+        placeholder="例: 次回大会の開催日程は？",
+        required=True,
+        max_length=200,
+    )
+    options_field = discord.ui.TextInput(
+        label="選択肢（カンマ区切り・2〜10個）",
+        placeholder="例: 霊夢,魔理沙,チルノ",
+        required=True,
+        max_length=300,
+    )
+    allow_multiple_field = discord.ui.TextInput(
+        label="複数選択を許可する？（はい/いいえ）",
+        default="はい",
+        required=False,
+        max_length=10,
+    )
+    anonymous_field = discord.ui.TextInput(
+        label="匿名にする？（はい/いいえ）",
+        default="はい",
+        required=False,
+        max_length=10,
+    )
+    deadline_field = discord.ui.TextInput(
+        label="締め切り（任意・YYYY-MM-DD HH:MM）",
+        placeholder="例: 2026-06-30 23:59",
+        required=False,
+        max_length=20,
+    )
+
+    def __init__(self, target_channel: discord.TextChannel, bot_instance: commands.Bot):
+        super().__init__()
+        self.target_channel = target_channel
+        self.bot_instance = bot_instance
+
+    async def on_submit(self, interaction: discord.Interaction):
+        question = self.question_field.value.strip()
+        option_list = [o.strip() for o in self.options_field.value.split(",") if o.strip()]
+
+        if len(option_list) < 2:
+            await interaction.response.send_message(
+                "❌ 選択肢は2個以上をカンマ区切りで入力してください。\n例: `霊夢,魔理沙,チルノ`",
+                ephemeral=True,
+            )
+            return
+        if len(option_list) > 10:
+            await interaction.response.send_message(
+                "❌ 選択肢は最大10個です。", ephemeral=True
+            )
+            return
+
+        allow_multiple = _parse_bool(self.allow_multiple_field.value, default=True)
+        anonymous = _parse_bool(self.anonymous_field.value, default=True)
+
+        deadline_str: str | None = None
+        deadline_input = self.deadline_field.value.strip()
+        if deadline_input:
+            parsed = None
+            for fmt in ("%Y-%m-%d %H:%M", "%Y/%m/%d %H:%M"):
+                try:
+                    parsed = datetime.datetime.strptime(deadline_input, fmt).replace(tzinfo=JST)
+                    break
+                except ValueError:
+                    continue
+            if parsed is None:
+                await interaction.response.send_message(
+                    "❌ 期限の形式が正しくありません。`YYYY-MM-DD HH:MM` の形式で入力してください。\n例: `2026-06-30 23:59`",
+                    ephemeral=True,
+                )
+                return
+            if parsed <= datetime.datetime.now(JST):
+                await interaction.response.send_message(
+                    "❌ 期限は現在より未来の日時を指定してください。", ephemeral=True
+                )
+                return
+            deadline_str = parsed.strftime("%Y-%m-%d %H:%M")
+
+        embed = build_poll_embed(
+            question=question,
+            options=option_list,
+            vote_rows=[],
+            is_active=True,
+            creator_name=interaction.user.display_name,
+            allow_multiple=allow_multiple,
+            deadline=deadline_str,
+        )
+
+        await interaction.response.defer(ephemeral=True)
+        msg = await self.target_channel.send(embed=embed)
+        poll_id = str(msg.id)
+
+        await db.create_poll(
+            poll_id=poll_id,
+            channel_id=self.target_channel.id,
+            creator_id=interaction.user.id,
+            question=question,
+            options=option_list,
+            allow_multiple=allow_multiple,
+            is_anonymous=anonymous,
+            deadline=deadline_str,
+        )
+
+        view = PollView(poll_id=poll_id, options=option_list)
+        self.bot_instance.add_view(view)
+        await msg.edit(view=view)
+
+        await interaction.followup.send(
+            f"✅ 投票アンケートを {self.target_channel.mention} に作成しました！\n"
+            f"メッセージID: `{poll_id}`",
+            ephemeral=True,
+        )
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
+        await interaction.response.send_message(
+            f"⚠️ エラーが発生しました: {error}", ephemeral=True
+        )
+
+
+class PollTypeChoiceView(discord.ui.View):
+    """パネルの「アンケートを作る」ボタンを押した後に出す種類選択"""
+
+    def __init__(self, target_channel: discord.TextChannel, bot_instance: commands.Bot):
+        super().__init__(timeout=60)
+        self.target_channel = target_channel
+        self.bot_instance = bot_instance
+
+    @discord.ui.button(label="投票アンケート", emoji="🗳️", style=discord.ButtonStyle.primary)
+    async def create_poll(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(
+            PollCreateModal(target_channel=self.target_channel, bot_instance=self.bot_instance)
+        )
+
+    @discord.ui.button(label="テキストアンケート", emoji="📝", style=discord.ButtonStyle.success)
+    async def create_survey(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(
+            SurveyCreateModal(target_channel=self.target_channel, bot_instance=self.bot_instance)
+        )
+
+
+class PollPanelButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(
+            style=discord.ButtonStyle.primary,
+            label="アンケートを作成",
+            emoji="➕",
+            custom_id="poll_panel_create",
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_message(
+            "作成するアンケートの種類を選んでください。",
+            view=PollTypeChoiceView(target_channel=interaction.channel, bot_instance=interaction.client),
+            ephemeral=True,
+        )
+
+
+class PollPanelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(PollPanelButton())
+
+
 def build_voter_names(vote_rows: list, options: list[str], bot: commands.Bot) -> list[list[str]]:
     """選択肢ごとの投票者表示名リストを返す"""
     names_per_option: list[list[str]] = [[] for _ in options]
@@ -405,6 +581,8 @@ class PollCog(commands.Cog):
         active_surveys = await db.get_active_surveys()
         for survey in active_surveys:
             self.bot.add_view(SurveyAnswerView(survey_id=survey["survey_id"]))
+
+        self.bot.add_view(PollPanelView())
 
         if not self._check_expired_polls.is_running():
             self._check_expired_polls.start()
@@ -656,6 +834,39 @@ class PollCog(commands.Cog):
 
         await interaction.response.send_message(
             "✅ 投票アンケートの表示を更新しました。", ephemeral=True
+        )
+
+    # ── /poll_panel ──────────────────────────────────────────
+
+    @app_commands.command(
+        name="poll_panel",
+        description="ボタンからアンケートを作成できるパネルを設置します（サーバー管理者のみ）",
+    )
+    @app_commands.describe(channel="設置するチャンネル（省略時は現在のチャンネル）")
+    async def poll_panel(
+        self,
+        interaction: discord.Interaction,
+        channel: Optional[discord.TextChannel] = None,
+    ):
+        if not interaction.user.guild_permissions.manage_guild:
+            await interaction.response.send_message(
+                "❌ このコマンドはサーバー管理者のみ使用できます。", ephemeral=True
+            )
+            return
+
+        target_channel = channel or interaction.channel
+        embed = discord.Embed(
+            title="📋 アンケート作成パネル",
+            description=(
+                "下のボタンから、投票アンケート（🗳️選択肢に投票）\n"
+                "またはテキストアンケート（📝自由記述で回答）を作成できます。"
+            ),
+            color=discord.Color.blue(),
+        )
+        await target_channel.send(embed=embed, view=PollPanelView())
+        await interaction.response.send_message(
+            f"✅ アンケート作成パネルを {target_channel.mention} に設置しました。",
+            ephemeral=True,
         )
 
     # ── /survey ──────────────────────────────────────────────
