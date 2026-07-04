@@ -459,7 +459,7 @@ class RecruitForumModal(discord.ui.Modal):
             placeholder="例: IP / クラ専",
             default=d.get("connection_type", ""),
             required=True,
-            max_length=20,
+            max_length=30,
         )
         self.match_settings = discord.ui.TextInput(
             label="対戦設定（必須）",
