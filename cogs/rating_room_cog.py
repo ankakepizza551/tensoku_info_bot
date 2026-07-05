@@ -112,7 +112,7 @@ def _build_queue_board_embed(guild: discord.Guild, queue: list) -> discord.Embed
         color=discord.Color.from_rgb(155, 89, 182),
     )
     if not queue:
-        embed.description = "現在、待機中のプレイヤーはいません。\n`/rating_queue_join` で参加できます。"
+        embed.description = "現在、待機中のプレイヤーはいません。"
     else:
         lines = []
         for q in queue:
@@ -130,8 +130,8 @@ async def _sync_queue_board(bot: commands.Bot, guild: discord.Guild):
     if board is None:
         return
 
-    channel = guild.get_channel(board["channel_id"])
-    if not isinstance(channel, discord.TextChannel):
+    channel = guild.get_channel_or_thread(board["channel_id"])
+    if not isinstance(channel, (discord.TextChannel, discord.Thread)):
         return
 
     try:
@@ -1026,10 +1026,10 @@ class RatingRoomCog(commands.Cog):
         name="setup_rating_queue_board",
         description="現在の待機人数を常時表示するボードをこのチャンネルに設置します（管理者用）",
     )
-    @app_commands.describe(channel="待機状況ボードを設置するチャンネル")
+    @app_commands.describe(channel="待機状況ボードを設置するチャンネル（スレッドも指定可）")
     @app_commands.default_permissions(manage_guild=True)
     async def setup_rating_queue_board(
-        self, interaction: discord.Interaction, channel: discord.TextChannel
+        self, interaction: discord.Interaction, channel: discord.TextChannel | discord.Thread
     ):
         queue = await db_manager.get_rating_queue(interaction.guild_id)
         embed = _build_queue_board_embed(interaction.guild, queue)
