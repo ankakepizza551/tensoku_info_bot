@@ -445,6 +445,64 @@ class RatingRegisterModal(discord.ui.Modal):
 
 
 # ─────────────────────────────────────────────
+#  常設操作パネル（/rating系コマンドのボタン版）
+# ─────────────────────────────────────────────
+
+class RatingPanelView(discord.ui.View):
+    """固定custom_idを使うグローバル永続View。メッセージ単位の紐付け不要で再起動後も機能する"""
+
+    def __init__(self, cog: "RatingRoomCog"):
+        super().__init__(timeout=None)
+        self.cog = cog
+
+        register_btn = discord.ui.Button(
+            label="📝 プロフィール登録/変更",
+            style=discord.ButtonStyle.primary,
+            custom_id="rating_panel:register",
+        )
+        register_btn.callback = self._register_callback
+
+        join_btn = discord.ui.Button(
+            label="⚔️ キューに参加",
+            style=discord.ButtonStyle.success,
+            custom_id="rating_panel:queue_join",
+        )
+        join_btn.callback = self._join_callback
+
+        leave_btn = discord.ui.Button(
+            label="🚪 キューから抜ける",
+            style=discord.ButtonStyle.secondary,
+            custom_id="rating_panel:queue_leave",
+        )
+        leave_btn.callback = self._leave_callback
+
+        status_btn = discord.ui.Button(
+            label="📋 待機状況を見る",
+            style=discord.ButtonStyle.secondary,
+            custom_id="rating_panel:queue_status",
+        )
+        status_btn.callback = self._status_callback
+
+        self.add_item(register_btn)
+        self.add_item(join_btn)
+        self.add_item(leave_btn)
+        self.add_item(status_btn)
+
+    async def _register_callback(self, interaction: discord.Interaction):
+        existing = await db_manager.get_rating_profile(interaction.user.id)
+        await interaction.response.send_modal(RatingRegisterModal(existing))
+
+    async def _join_callback(self, interaction: discord.Interaction):
+        await self.cog._handle_queue_join(interaction)
+
+    async def _leave_callback(self, interaction: discord.Interaction):
+        await self.cog._handle_queue_leave(interaction)
+
+    async def _status_callback(self, interaction: discord.Interaction):
+        await self.cog._handle_queue_status(interaction)
+
+
+# ─────────────────────────────────────────────
 #  Cog 本体
 # ─────────────────────────────────────────────
 
@@ -464,6 +522,9 @@ class RatingRoomCog(commands.Cog):
         if restored:
             logger.info(f"rating_room: スレッドパネル {restored} 件のViewを再登録")
 
+        # 常設操作パネル（固定custom_idのため、メッセージ単位の紐付けなしでグローバル登録できる）
+        self.bot.add_view(RatingPanelView(self))
+
     # ── /rating_register ─────────────────────────
 
     @app_commands.command(
@@ -481,6 +542,9 @@ class RatingRoomCog(commands.Cog):
         description="レーティングルームのマッチングキューに参加します（レート差100以内で自動マッチング）",
     )
     async def rating_queue_join(self, interaction: discord.Interaction):
+        await self._handle_queue_join(interaction)
+
+    async def _handle_queue_join(self, interaction: discord.Interaction):
         profile = await db_manager.get_rating_profile(interaction.user.id)
         if profile is None:
             await interaction.response.send_message(
@@ -649,6 +713,9 @@ class RatingRoomCog(commands.Cog):
         description="レーティングルームのマッチングキューから抜けます",
     )
     async def rating_queue_leave(self, interaction: discord.Interaction):
+        await self._handle_queue_leave(interaction)
+
+    async def _handle_queue_leave(self, interaction: discord.Interaction):
         removed = await db_manager.leave_rating_queue(interaction.user.id)
         if removed:
             await _sync_queue_board(self.bot, interaction.guild)
@@ -663,6 +730,9 @@ class RatingRoomCog(commands.Cog):
         description="レーティングルームのマッチングキューの状況を表示します",
     )
     async def rating_queue_status(self, interaction: discord.Interaction):
+        await self._handle_queue_status(interaction)
+
+    async def _handle_queue_status(self, interaction: discord.Interaction):
         queue = await db_manager.get_rating_queue(interaction.guild_id)
         embed = discord.Embed(
             title="⏳ レーティングルーム キュー状況",
@@ -752,6 +822,42 @@ class RatingRoomCog(commands.Cog):
         logger.info(
             f"setup_rating_queue_board: guild={interaction.guild_id} channel={channel.id} message={board_msg.id}"
         )
+
+    # ── /setup_rating_panel ───────────────────────
+
+    @app_commands.command(
+        name="setup_rating_panel",
+        description="登録・キュー参加・キュー離脱・状況確認をボタンで行える操作パネルをこのチャンネルに設置します（管理者用）",
+    )
+    @app_commands.describe(channel="操作パネルを設置するチャンネル")
+    @app_commands.default_permissions(manage_guild=True)
+    async def setup_rating_panel(
+        self, interaction: discord.Interaction, channel: discord.TextChannel
+    ):
+        embed = discord.Embed(
+            title="⚔️ レーティングルーム 操作パネル",
+            description=(
+                "下のボタンから操作できます。\n"
+                "・📝 プロフィール登録/変更: 固定キャラ等の登録・変更\n"
+                "・⚔️ キューに参加: マッチングキューに参加（レート差100以内で自動マッチング）\n"
+                "・🚪 キューから抜ける: キューをキャンセル\n"
+                "・📋 待機状況を見る: 現在の待機人数・待機者一覧を確認"
+            ),
+            color=discord.Color.from_rgb(155, 89, 182),
+        )
+
+        try:
+            await channel.send(embed=embed, view=RatingPanelView(self))
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                f"❌ {channel.mention} にメッセージを送信する権限がありません。", ephemeral=True
+            )
+            return
+
+        await interaction.response.send_message(
+            f"✅ 操作パネルを {channel.mention} に設置しました。", ephemeral=True
+        )
+        logger.info(f"setup_rating_panel: guild={interaction.guild_id} channel={channel.id}")
 
 
 async def setup(bot: commands.Bot):
