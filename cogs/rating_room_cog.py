@@ -7,7 +7,7 @@ from discord.ext import commands
 from database import db_manager
 from rating_ranks import get_rank
 from cogs.report_cog import CHARACTERS
-from cogs.forum_recruit_cog import find_character, _stats_callback
+from cogs.forum_recruit_cog import find_character
 
 logger = logging.getLogger("TensokuMatchBot")
 
@@ -38,6 +38,72 @@ def _profile_summary(profile: dict, rating: float) -> str:
         f"希望レート差: `{_format_max_diff(max_diff)}`\n"
         f"レート: `{round(rating, 1)}` (ランク: `{rank}`)"
     )
+
+
+async def _build_rating_stats_embed(member: discord.Member) -> discord.Embed:
+    profile = await db_manager.get_rating_profile(member.id)
+    user_info = await db_manager.get_or_create_user(member.id, member.display_name)
+    rating = user_info["rating"]
+    rank = get_rank(rating)
+
+    embed = discord.Embed(
+        title=f"🏆 {member.display_name} のレーティングルームスタッツ",
+        color=discord.Color.from_rgb(155, 89, 182),
+    )
+    embed.set_thumbnail(url=member.display_avatar.url)
+    embed.add_field(name="レート", value=f"`{round(rating, 1)}`", inline=True)
+    embed.add_field(name="ランク", value=f"`{rank}`", inline=True)
+
+    if profile is None:
+        embed.add_field(
+            name="プロフィール",
+            value="未登録です。`/rating_register` から登録できます。",
+            inline=False,
+        )
+        return embed
+
+    max_diff = profile.get("max_rating_diff") or DEFAULT_MAX_DIFF
+    embed.add_field(
+        name="プロフィール",
+        value=(
+            f"1戦目のキャラ: **{profile['main_character']}**\n"
+            f"IP/接続: `{profile['ip_info'] or '未設定'}`\n"
+            f"オートパンチ: `{profile['autopunch'] or '未設定'}`\n"
+            f"giuroll: `{profile['giuroll'] or '未設定'}`\n"
+            f"希望レート差: `{_format_max_diff(max_diff)}`"
+        ),
+        inline=False,
+    )
+
+    stats = await db_manager.get_user_stats(member.id, only_rated=True)
+    total = stats["total_matches"]
+    if total > 0:
+        embed.add_field(
+            name="レーティングルーム通算成績",
+            value=f"{stats['wins']}勝 {stats['losses']}敗 ({total}試合) / 勝率 `{stats['win_rate']}%`",
+            inline=False,
+        )
+        if stats["recent_history"]:
+            lines = []
+            for h in stats["recent_history"]:
+                icon = "✅" if h["is_win"] else "❌"
+                lines.append(
+                    f"{icon} vs {h['opponent_name']} `{h['my_score']}-{h['opponent_score']}`"
+                )
+            embed.add_field(name="直近のレーティング対戦", value="\n".join(lines), inline=False)
+    else:
+        embed.add_field(
+            name="レーティングルーム通算成績",
+            value="まだレーティングルームでの対戦記録がありません。",
+            inline=False,
+        )
+
+    return embed
+
+
+async def _rating_stats_callback(interaction: discord.Interaction):
+    embed = await _build_rating_stats_embed(interaction.user)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 def _build_queue_board_embed(guild: discord.Guild, queue: list) -> discord.Embed:
@@ -306,7 +372,7 @@ class RatingThreadInProgressView(discord.ui.View):
             style=discord.ButtonStyle.secondary,
             custom_id=f"rt_stats:{thread_id}",
         )
-        stats_btn.callback = _stats_callback
+        stats_btn.callback = _rating_stats_callback
 
         delete_btn = discord.ui.Button(
             label="🗑️ スレッドを削除",
@@ -371,7 +437,7 @@ class RatingThreadCompletedView(discord.ui.View):
             style=discord.ButtonStyle.secondary,
             custom_id=f"rt_stats:{thread_id}",
         )
-        stats_btn.callback = _stats_callback
+        stats_btn.callback = _rating_stats_callback
 
         delete_btn = discord.ui.Button(
             label="🗑️ スレッドを削除",
@@ -616,11 +682,19 @@ class RatingPanelView(discord.ui.View):
         )
         diff_btn.callback = self._diff_callback
 
+        stats_btn = discord.ui.Button(
+            label="🏆 レーティングスタッツ",
+            style=discord.ButtonStyle.secondary,
+            custom_id="rating_panel:stats",
+        )
+        stats_btn.callback = _rating_stats_callback
+
         self.add_item(register_btn)
         self.add_item(join_btn)
         self.add_item(leave_btn)
         self.add_item(status_btn)
         self.add_item(diff_btn)
+        self.add_item(stats_btn)
 
     async def _register_callback(self, interaction: discord.Interaction):
         existing = await db_manager.get_rating_profile(interaction.user.id)
@@ -685,6 +759,18 @@ class RatingRoomCog(commands.Cog):
     async def rating_register(self, interaction: discord.Interaction):
         existing = await db_manager.get_rating_profile(interaction.user.id)
         await interaction.response.send_modal(RatingRegisterModal(existing))
+
+    # ── /rating_stats ─────────────────────────────
+
+    @app_commands.command(
+        name="rating_stats",
+        description="レーティングルームのスタッツ（レート・ランク・プロフィール・戦績）を表示します",
+    )
+    @app_commands.describe(user="表示したいユーザーを選択してください（指定しない場合は自分）")
+    async def rating_stats(self, interaction: discord.Interaction, user: discord.Member | None = None):
+        target = user or interaction.user
+        embed = await _build_rating_stats_embed(target)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # ── /rating_queue_join ───────────────────────
 
@@ -987,7 +1073,8 @@ class RatingRoomCog(commands.Cog):
                 "・⚔️ キューに参加: マッチングキューに参加（希望レート差の範囲内で自動マッチング）\n"
                 "・🚪 キューから抜ける: キューをキャンセル\n"
                 "・📋 待機状況を見る: 現在の待機人数・待機者一覧を確認\n"
-                "・🎚 希望レート差を設定: マッチングを許容するレート差の範囲を変更"
+                "・🎚 希望レート差を設定: マッチングを許容するレート差の範囲を変更\n"
+                "・🏆 レーティングスタッツ: レート・ランク・プロフィール・戦績を確認"
             ),
             color=discord.Color.from_rgb(155, 89, 182),
         )

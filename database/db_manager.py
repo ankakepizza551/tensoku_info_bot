@@ -439,16 +439,17 @@ async def get_match(match_id: int):
         async with db.execute("SELECT * FROM matches WHERE match_id = ?", (match_id,)) as cursor:
             return await cursor.fetchone()
 
-async def get_user_stats(user_id: int) -> dict:
-    """ユーザーの戦績統計情報を集計して辞書で返す"""
+async def get_user_stats(user_id: int, only_rated: bool = False) -> dict:
+    """ユーザーの戦績統計情報を集計して辞書で返す。only_rated=True でレーティングルーム対戦のみに絞り込む"""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        
+
         # 1. ユーザーが関わった全対戦を取得
         # player1_id または player2_id が本人である試合
-        async with db.execute("""
-            SELECT * FROM matches 
-            WHERE (player1_id = ? OR player2_id = ?) AND is_confirmed = 1
+        rated_clause = "AND is_rated = 1" if only_rated else ""
+        async with db.execute(f"""
+            SELECT * FROM matches
+            WHERE (player1_id = ? OR player2_id = ?) AND is_confirmed = 1 {rated_clause}
             ORDER BY created_at DESC
         """, (user_id, user_id)) as cursor:
             rows = await cursor.fetchall()
