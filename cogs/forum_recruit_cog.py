@@ -187,6 +187,7 @@ class ThreadMatchReportModal(discord.ui.Modal):
                 score2=score2,
                 char1=char1,
                 char2=char2,
+                rated=False,
             )
 
             if score1 > score2:
@@ -195,9 +196,6 @@ class ThreadMatchReportModal(discord.ui.Modal):
                 winner_text = f"🏆 **{self.challenger.display_name}** の勝利！"
             else:
                 winner_text = "🤝 **引き分け！**"
-
-            sign1 = "+" if result["change1"] >= 0 else ""
-            sign2 = "+" if result["change2"] >= 0 else ""
 
             result_embed = discord.Embed(
                 title="📊 対戦結果 (募集対戦)",
@@ -209,7 +207,7 @@ class ThreadMatchReportModal(discord.ui.Modal):
                 value=(
                     f"使用キャラ: `{char1 or '未設定'}`\n"
                     f"獲得本数: **{score1}**\n"
-                    f"レート: `{round(result['old_rating1'], 1)}` → `{round(result['new_rating1'], 1)}` ({sign1}{round(result['change1'], 1)})"
+                    f"現在のレート: `{round(result['old_rating1'], 1)}` （フリー対戦のためレート変動なし）"
                 ),
                 inline=True,
             )
@@ -218,7 +216,7 @@ class ThreadMatchReportModal(discord.ui.Modal):
                 value=(
                     f"使用キャラ: `{char2 or '未設定'}`\n"
                     f"獲得本数: **{score2}**\n"
-                    f"レート: `{round(result['old_rating2'], 1)}` → `{round(result['new_rating2'], 1)}` ({sign2}{round(result['change2'], 1)})"
+                    f"現在のレート: `{round(result['old_rating2'], 1)}` （フリー対戦のためレート変動なし）"
                 ),
                 inline=True,
             )

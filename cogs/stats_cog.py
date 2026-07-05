@@ -2,6 +2,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from database import db_manager
+from rating_ranks import get_rank
 
 class StatsCog(commands.Cog):
     def __init__(self, bot):
@@ -17,7 +18,7 @@ class StatsCog(commands.Cog):
         
         try:
             # ユーザー情報の取得（作成）
-            await db_manager.get_or_create_user(target_user.id, target_user.display_name)
+            user_info = await db_manager.get_or_create_user(target_user.id, target_user.display_name)
             
             # 統計データの取得
             stats_data = await db_manager.get_user_stats(target_user.id)
@@ -45,16 +46,17 @@ class StatsCog(commands.Cog):
             losses = stats_data["losses"]
             total = stats_data["total_matches"]
             user_rating = user_info["rating"] if "rating" in user_info.keys() else 1500.0
-            
+            user_rank = get_rank(user_rating)
+
             # ビジュアルゲージの作成 (10文字分)
             bar_length = 10
             filled_length = int(bar_length * (win_rate / 100))
             # 🟢が勝ち、🔴が負け
             gauge = "🟢" * filled_length + "🔴" * (bar_length - filled_length)
-            
+
             embed.add_field(
                 name="総合戦績",
-                value=f"**レーティング:** `{round(user_rating, 1)}` (初期値: 1500)\n"
+                value=f"**レーティング:** `{round(user_rating, 1)}` (ランク: `{user_rank}`) (初期値: 1500)\n"
                       f"**総対戦数:** `{total}` 戦\n"
                       f"**勝敗数:** `{wins}` 勝 `{losses}` 敗\n"
                       f"**勝率:** `{win_rate}%`\n"
@@ -144,7 +146,8 @@ class StatsCog(commands.Cog):
                     
                 leaderboard_text += (
                     f"{rank_emoji} **{p['username']}** : "
-                    f"レート `{p['rating']}` (勝率 `{p['win_rate']}%` / `{p['wins']}勝-{p['losses']}敗 / 総数 {p['total']})\n"
+                    f"レート `{p['rating']}` (ランク `{get_rank(p['rating'])}`) "
+                    f"(勝率 `{p['win_rate']}%` / `{p['wins']}勝-{p['losses']}敗 / 総数 {p['total']})\n"
                 )
                 
             embed.add_field(name="ランキング", value=leaderboard_text, inline=False)

@@ -96,7 +96,8 @@ class MatchReportModal(discord.ui.Modal):
                 score1=score1,
                 score2=score2,
                 char1=char1,
-                char2=char2
+                char2=char2,
+                rated=False
             )
             
             # 結果表示用Embedの作成
@@ -116,15 +117,12 @@ class MatchReportModal(discord.ui.Modal):
                 
             embed.add_field(name="結果", value=winner_text, inline=False)
             
-            sign1 = "+" if result["change1"] >= 0 else ""
-            sign2 = "+" if result["change2"] >= 0 else ""
-            
             embed.add_field(
                 name=recruiter.display_name,
                 value=(
                     f"使用キャラ: `{char1 or '未設定'}`\n"
                     f"獲得本数: **{score1}**\n"
-                    f"レート: `{round(result['old_rating1'], 1)}` ➔ `{round(result['new_rating1'], 1)}` ({sign1}{round(result['change1'], 1)})"
+                    f"現在のレート: `{round(result['old_rating1'], 1)}` （フリー対戦のためレート変動なし）"
                 ),
                 inline=True
             )
@@ -133,7 +131,7 @@ class MatchReportModal(discord.ui.Modal):
                 value=(
                     f"使用キャラ: `{char2 or '未設定'}`\n"
                     f"獲得本数: **{score2}**\n"
-                    f"レート: `{round(result['old_rating2'], 1)}` ➔ `{round(result['new_rating2'], 1)}` ({sign2}{round(result['change2'], 1)})"
+                    f"現在のレート: `{round(result['old_rating2'], 1)}` （フリー対戦のためレート変動なし）"
                 ),
                 inline=True
             )

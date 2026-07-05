@@ -69,7 +69,8 @@ class ReportCog(commands.Cog):
                 score1=my_score,
                 score2=opponent_score,
                 char1=my_char,
-                char2=opponent_char
+                char2=opponent_char,
+                rated=False
             )
             match_id = result["match_id"]
             
@@ -93,16 +94,13 @@ class ReportCog(commands.Cog):
             # 詳細スコアの表示
             char1_display = f" ({my_char})" if my_char else ""
             char2_display = f" ({opponent_char})" if opponent_char else ""
-            
-            sign1 = "+" if result["change1"] >= 0 else ""
-            sign2 = "+" if result["change2"] >= 0 else ""
-            
+
             embed.add_field(
                 name=player1_name,
                 value=(
                     f"使用キャラ: `{my_char or '未設定'}`\n"
                     f"獲得本数: **{my_score}**\n"
-                    f"レート: `{round(result['old_rating1'], 1)}` ➔ `{round(result['new_rating1'], 1)}` ({sign1}{round(result['change1'], 1)})"
+                    f"現在のレート: `{round(result['old_rating1'], 1)}` （フリー対戦のためレート変動なし）"
                 ),
                 inline=True
             )
@@ -111,11 +109,11 @@ class ReportCog(commands.Cog):
                 value=(
                     f"使用キャラ: `{opponent_char or '未設定'}`\n"
                     f"獲得本数: **{opponent_score}**\n"
-                    f"レート: `{round(result['old_rating2'], 1)}` ➔ `{round(result['new_rating2'], 1)}` ({sign2}{round(result['change2'], 1)})"
+                    f"現在のレート: `{round(result['old_rating2'], 1)}` （フリー対戦のためレート変動なし）"
                 ),
                 inline=True
             )
-            
+
             # 報告者情報の表示
             embed.set_footer(text=f"報告者: {interaction.user.name} | 間違えた場合は /delete_match で削除できます")
             

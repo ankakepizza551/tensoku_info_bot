@@ -55,11 +55,11 @@ async def init_db():
             await db.execute("ALTER TABLE matches ADD COLUMN rating_change2 REAL DEFAULT 0.0")
         await db.commit()
 
-        # polls テーブルに is_anonymous カラムが存在しない場合は追加
-        async with db.execute("PRAGMA table_info(polls)") as cursor:
+        # matches テーブルに is_rated（レーティングルーム対戦かどうか）が存在しない場合は追加
+        async with db.execute("PRAGMA table_info(matches)") as cursor:
             columns = [row[1] for row in await cursor.fetchall()]
-        if "is_anonymous" not in columns:
-            await db.execute("ALTER TABLE polls ADD COLUMN is_anonymous INTEGER DEFAULT 1")
+        if "is_rated" not in columns:
+            await db.execute("ALTER TABLE matches ADD COLUMN is_rated INTEGER DEFAULT 0")
             await db.commit()
 
         # 匿名お便りテーブル
@@ -89,6 +89,13 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # polls テーブルに is_anonymous カラムが存在しない場合は追加
+        async with db.execute("PRAGMA table_info(polls)") as cursor:
+            columns = [row[1] for row in await cursor.fetchall()]
+        if "is_anonymous" not in columns:
+            await db.execute("ALTER TABLE polls ADD COLUMN is_anonymous INTEGER DEFAULT 1")
+            await db.commit()
+
         await db.execute("""
             CREATE TABLE IF NOT EXISTS poll_votes (
                 poll_id TEXT NOT NULL,
@@ -238,6 +245,56 @@ async def init_db():
             await db.execute("ALTER TABLE article_panels ADD COLUMN category_id INTEGER")
             await db.commit()
 
+        # レーティングルーム: ユーザープロフィール（固定キャラ・接続情報など）
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS rating_profiles (
+                user_id INTEGER PRIMARY KEY,
+                main_character TEXT NOT NULL,
+                ip_info TEXT DEFAULT '',
+                autopunch TEXT DEFAULT '',
+                giuroll TEXT DEFAULT '',
+                comment TEXT DEFAULT '',
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        # レーティングルーム: マッチングキュー
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS rating_queue (
+                user_id INTEGER PRIMARY KEY,
+                guild_id INTEGER NOT NULL,
+                joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        # レーティングルーム: 対戦スレッドコントロールパネル
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS rating_threads (
+                thread_id INTEGER PRIMARY KEY,
+                panel_message_id INTEGER NOT NULL,
+                player1_id INTEGER NOT NULL,
+                player2_id INTEGER NOT NULL,
+                status TEXT DEFAULT 'in_progress',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        # レーティングルーム: ギルドごとの設定（投稿先フォーラム・通知先）
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS rating_settings (
+                guild_id INTEGER PRIMARY KEY,
+                forum_channel_id INTEGER NOT NULL,
+                notify_channel_id INTEGER,
+                mention_role_id INTEGER
+            )
+        """)
+        # レーティングルーム: キュー可視化ボード（常設メッセージを編集して更新）
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS rating_queue_board (
+                guild_id INTEGER PRIMARY KEY,
+                channel_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL
+            )
+        """)
+        await db.commit()
+
 async def get_or_create_user(user_id: int, username: str):
     """ユーザー情報を取得、なければ新規登録。ユーザー名が変わっている場合は更新"""
     async with aiosqlite.connect(DB_PATH) as db:
@@ -263,52 +320,59 @@ async def get_or_create_user(user_id: int, username: str):
 
 async def add_match(reporter_id: int, player1_id: int, player1_name: str,
                     player2_id: int, player2_name: str,
-                    score1: int, score2: int, char1: str = None, char2: str = None) -> dict:
-    """戦績をデータベースに登録し、Eloレーティング計算・更新を行って結果を返す"""
+                    score1: int, score2: int, char1: str = None, char2: str = None,
+                    rated: bool = True) -> dict:
+    """戦績をデータベースに登録する。rated=True の場合のみEloレーティング計算・更新を行う"""
     # 双方のユーザーをDBに作成/更新
     p1 = await get_or_create_user(player1_id, player1_name)
     p2 = await get_or_create_user(player2_id, player2_name)
-    
+
     old_r1 = p1["rating"]
     old_r2 = p2["rating"]
-    
-    # Eloレーティング期待値の計算
-    expected1 = 1.0 / (1.0 + 10.0 ** ((old_r2 - old_r1) / 400.0))
-    expected2 = 1.0 / (1.0 + 10.0 ** ((old_r1 - old_r2) / 400.0))
-    
-    # 勝敗判定 (S1, S2)
-    if score1 > score2:
-        s1, s2 = 1.0, 0.0
-    elif score2 > score1:
-        s1, s2 = 0.0, 1.0
+
+    if rated:
+        # Eloレーティング期待値の計算
+        expected1 = 1.0 / (1.0 + 10.0 ** ((old_r2 - old_r1) / 400.0))
+        expected2 = 1.0 / (1.0 + 10.0 ** ((old_r1 - old_r2) / 400.0))
+
+        # 勝敗判定 (S1, S2)
+        if score1 > score2:
+            s1, s2 = 1.0, 0.0
+        elif score2 > score1:
+            s1, s2 = 0.0, 1.0
+        else:
+            s1, s2 = 0.5, 0.5
+
+        k_factor = 32.0
+        change1 = k_factor * (s1 - expected1)
+        change2 = k_factor * (s2 - expected2)
+
+        new_r1 = old_r1 + change1
+        new_r2 = old_r2 + change2
     else:
-        s1, s2 = 0.5, 0.5
-        
-    k_factor = 32.0
-    change1 = k_factor * (s1 - expected1)
-    change2 = k_factor * (s2 - expected2)
-    
-    new_r1 = old_r1 + change1
-    new_r2 = old_r2 + change2
-    
+        # フリー対戦（レート変動なし）
+        change1, change2 = 0.0, 0.0
+        new_r1, new_r2 = old_r1, old_r2
+
     async with aiosqlite.connect(DB_PATH) as db:
         # トランザクション処理
         await db.execute("BEGIN TRANSACTION")
         try:
             cursor = await db.execute("""
-                INSERT INTO matches (reporter_id, player1_id, player2_id, score1, score2, char1, char2, rating_change1, rating_change2)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (reporter_id, player1_id, player2_id, score1, score2, char1, char2, change1, change2))
+                INSERT INTO matches (reporter_id, player1_id, player2_id, score1, score2, char1, char2, rating_change1, rating_change2, is_rated)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (reporter_id, player1_id, player2_id, score1, score2, char1, char2, change1, change2, int(rated)))
             match_id = cursor.lastrowid
-            
-            # ユーザーのレーティング更新
-            await db.execute("UPDATE users SET rating = ? WHERE user_id = ?", (new_r1, player1_id))
-            await db.execute("UPDATE users SET rating = ? WHERE user_id = ?", (new_r2, player2_id))
+
+            if rated:
+                # ユーザーのレーティング更新
+                await db.execute("UPDATE users SET rating = ? WHERE user_id = ?", (new_r1, player1_id))
+                await db.execute("UPDATE users SET rating = ? WHERE user_id = ?", (new_r2, player2_id))
             await db.commit()
         except Exception as e:
             await db.execute("ROLLBACK")
             raise e
-            
+
     return {
         "match_id": match_id,
         "old_rating1": old_r1,
@@ -316,7 +380,8 @@ async def add_match(reporter_id: int, player1_id: int, player1_name: str,
         "change1": change1,
         "old_rating2": old_r2,
         "new_rating2": new_r2,
-        "change2": change2
+        "change2": change2,
+        "rated": rated
     }
 
 async def delete_match(match_id: int) -> bool:
@@ -981,3 +1046,176 @@ async def delete_article_thread(thread_id: int) -> bool:
         ) as cursor:
             await db.commit()
             return cursor.rowcount > 0
+
+# ── レーティングルーム: プロフィール ──────────────────────────────
+
+async def save_rating_profile(
+    user_id: int, main_character: str, ip_info: str, autopunch: str, giuroll: str, comment: str
+) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT INTO rating_profiles
+               (user_id, main_character, ip_info, autopunch, giuroll, comment, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(user_id) DO UPDATE SET
+               main_character=excluded.main_character,
+               ip_info=excluded.ip_info,
+               autopunch=excluded.autopunch,
+               giuroll=excluded.giuroll,
+               comment=excluded.comment,
+               updated_at=CURRENT_TIMESTAMP""",
+            (user_id, main_character, ip_info, autopunch, giuroll, comment),
+        )
+        await db.commit()
+
+async def get_rating_profile(user_id: int) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM rating_profiles WHERE user_id = ?", (user_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        return dict(row) if row else None
+
+# ── レーティングルーム: マッチングキュー ──────────────────────────
+
+async def join_rating_queue(user_id: int, guild_id: int) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT INTO rating_queue (user_id, guild_id, joined_at)
+               VALUES (?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(user_id) DO UPDATE SET
+               guild_id=excluded.guild_id, joined_at=CURRENT_TIMESTAMP""",
+            (user_id, guild_id),
+        )
+        await db.commit()
+
+async def leave_rating_queue(user_id: int) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "DELETE FROM rating_queue WHERE user_id = ?", (user_id,)
+        ) as cursor:
+            await db.commit()
+            return cursor.rowcount > 0
+
+async def get_rating_queue(guild_id: int) -> list:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM rating_queue WHERE guild_id = ? ORDER BY joined_at", (guild_id,)
+        ) as cursor:
+            return [dict(r) for r in await cursor.fetchall()]
+
+async def find_rating_match(guild_id: int, user_id: int, rating: float, max_diff: float = 100.0) -> dict | None:
+    """キュー内から自分以外でレート差が max_diff 以内、かつ差が最小の相手を返す"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            """SELECT q.user_id as user_id, u.rating as rating
+               FROM rating_queue q
+               JOIN users u ON u.user_id = q.user_id
+               WHERE q.guild_id = ? AND q.user_id != ?
+               ORDER BY q.joined_at""",
+            (guild_id, user_id),
+        ) as cursor:
+            candidates = await cursor.fetchall()
+
+    best = None
+    best_diff = None
+    for c in candidates:
+        diff = abs(c["rating"] - rating)
+        if diff <= max_diff and (best_diff is None or diff < best_diff):
+            best = c
+            best_diff = diff
+    return dict(best) if best else None
+
+# ── レーティングルーム: 対戦スレッドコントロールパネル ────────────
+
+async def add_rating_thread(thread_id: int, panel_message_id: int, player1_id: int, player2_id: int) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT OR REPLACE INTO rating_threads
+               (thread_id, panel_message_id, player1_id, player2_id) VALUES (?, ?, ?, ?)""",
+            (thread_id, panel_message_id, player1_id, player2_id),
+        )
+        await db.commit()
+
+async def get_rating_thread(thread_id: int) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM rating_threads WHERE thread_id = ?", (thread_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        return dict(row) if row else None
+
+async def get_active_rating_threads() -> list:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM rating_threads WHERE status != 'completed'"
+        ) as cursor:
+            return [dict(r) for r in await cursor.fetchall()]
+
+async def update_rating_thread_status(thread_id: int, status: str) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE rating_threads SET status = ? WHERE thread_id = ?", (status, thread_id)
+        )
+        await db.commit()
+
+async def delete_rating_thread(thread_id: int) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "DELETE FROM rating_threads WHERE thread_id = ?", (thread_id,)
+        ) as cursor:
+            await db.commit()
+            return cursor.rowcount > 0
+
+# ── レーティングルーム: ギルド設定 ────────────────────────────────
+
+async def save_rating_settings(
+    guild_id: int, forum_channel_id: int, notify_channel_id: int | None, mention_role_id: int | None
+) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT INTO rating_settings (guild_id, forum_channel_id, notify_channel_id, mention_role_id)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(guild_id) DO UPDATE SET
+               forum_channel_id=excluded.forum_channel_id,
+               notify_channel_id=excluded.notify_channel_id,
+               mention_role_id=excluded.mention_role_id""",
+            (guild_id, forum_channel_id, notify_channel_id, mention_role_id),
+        )
+        await db.commit()
+
+async def get_rating_settings(guild_id: int) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM rating_settings WHERE guild_id = ?", (guild_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        return dict(row) if row else None
+
+# ── レーティングルーム: キュー可視化ボード ────────────────────────
+
+async def save_rating_queue_board(guild_id: int, channel_id: int, message_id: int) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT INTO rating_queue_board (guild_id, channel_id, message_id)
+               VALUES (?, ?, ?)
+               ON CONFLICT(guild_id) DO UPDATE SET
+               channel_id=excluded.channel_id, message_id=excluded.message_id""",
+            (guild_id, channel_id, message_id),
+        )
+        await db.commit()
+
+async def get_rating_queue_board(guild_id: int) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM rating_queue_board WHERE guild_id = ?", (guild_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        return dict(row) if row else None
