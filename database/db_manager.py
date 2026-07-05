@@ -245,7 +245,7 @@ async def init_db():
             await db.execute("ALTER TABLE article_panels ADD COLUMN category_id INTEGER")
             await db.commit()
 
-        # レーティングルーム: ユーザープロフィール（固定キャラ・接続情報など）
+        # レーティングルーム: ユーザープロフィール（1戦目のキャラ・接続情報など）
         await db.execute("""
             CREATE TABLE IF NOT EXISTS rating_profiles (
                 user_id INTEGER PRIMARY KEY,

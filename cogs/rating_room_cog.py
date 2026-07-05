@@ -21,7 +21,7 @@ BEST_OF = "2先 (2本先取)"
 def _profile_summary(profile: dict, rating: float) -> str:
     rank = get_rank(rating)
     return (
-        f"固定キャラ: **{profile['main_character']}**\n"
+        f"1戦目のキャラ: **{profile['main_character']}**\n"
         f"IP/接続: `{profile['ip_info'] or '未設定'}`\n"
         f"オートパンチ: `{profile['autopunch'] or '未設定'}`\n"
         f"giuroll: `{profile['giuroll'] or '未設定'}`\n"
@@ -363,7 +363,7 @@ class RatingRegisterModal(discord.ui.Modal):
         e = existing or {}
 
         self.main_character = discord.ui.TextInput(
-            label="固定キャラ（必須・変更不可の対戦キャラ）",
+            label="1戦目のキャラ（必須・変更不可の対戦キャラ）",
             placeholder="例: 霊夢",
             default=e.get("main_character", ""),
             required=True,
@@ -408,7 +408,7 @@ class RatingRegisterModal(discord.ui.Modal):
         char = find_character(self.main_character.value)
         if char is None:
             await interaction.response.send_message(
-                f"❌ 固定キャラが認識できませんでした。以下から近い名前で入力してください:\n"
+                f"❌ 1戦目のキャラが認識できませんでした。以下から近い名前で入力してください:\n"
                 f"`{'`, `'.join(CHARACTERS)}`",
                 ephemeral=True,
             )
@@ -429,7 +429,7 @@ class RatingRegisterModal(discord.ui.Modal):
                         "変更したい場合は再度 `/rating_register` を実行してください。",
             color=discord.Color.from_rgb(46, 204, 113),
         )
-        embed.add_field(name="固定キャラ", value=char, inline=True)
+        embed.add_field(name="1戦目のキャラ", value=char, inline=True)
         embed.add_field(name="IP/接続情報", value=self.ip_info.value.strip(), inline=True)
         embed.add_field(name="オートパンチ", value=self.autopunch.value.strip(), inline=True)
         embed.add_field(name="giuroll", value=self.giuroll.value.strip(), inline=True)
@@ -529,7 +529,7 @@ class RatingRoomCog(commands.Cog):
 
     @app_commands.command(
         name="rating_register",
-        description="レーティングルーム用のプロフィール（固定キャラ・接続情報など）を登録/変更します",
+        description="レーティングルーム用のプロフィール（1戦目のキャラ・接続情報など）を登録/変更します",
     )
     async def rating_register(self, interaction: discord.Interaction):
         existing = await db_manager.get_rating_profile(interaction.user.id)
@@ -840,7 +840,7 @@ class RatingRoomCog(commands.Cog):
             title="⚔️ レーティングルーム 操作パネル",
             description=(
                 "下のボタンから操作できます。\n"
-                "・📝 プロフィール登録/変更: 固定キャラ等の登録・変更\n"
+                "・📝 プロフィール登録/変更: 1戦目のキャラ等の登録・変更\n"
                 "・⚔️ キューに参加: マッチングキューに参加（レート差100以内で自動マッチング）\n"
                 "・🚪 キューから抜ける: キューをキャンセル\n"
                 "・📋 待機状況を見る: 現在の待機人数・待機者一覧を確認"
