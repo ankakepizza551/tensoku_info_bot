@@ -669,23 +669,15 @@ class RatingRoomCog(commands.Cog):
                 f"{player1.mention} {player2.mention} マッチが成立しました！準備ができ次第、対戦を開始してください。"
             )
 
-            # すでに待機していた側（player1）はこのインタラクションの応答を受け取れないため、DMで通知する
-            try:
-                await player1.send(
-                    f"⚔️ レーティング対戦のマッチが成立しました！\n"
-                    f"相手: {player2.display_name}\n→ {thread.jump_url}"
-                )
-            except (discord.Forbidden, discord.HTTPException) as e:
-                logger.info(f"rating_match DM通知失敗（DM閉鎖の可能性）: user={player1.id} error={e}")
-
-            if settings.get("notify_channel_id"):
-                notify_ch = interaction.guild.get_channel(settings["notify_channel_id"])
-                if isinstance(notify_ch, discord.TextChannel):
-                    mention = f"<@&{settings['mention_role_id']}> " if settings.get("mention_role_id") else ""
-                    await notify_ch.send(
-                        f"{mention}レーティング対戦が成立しました！\n"
-                        f"{player1.mention} vs {player2.mention} → {thread.mention}"
+            # マッチしたユーザー本人にのみ通知する（他ユーザーには一切公開しない）
+            for me, opp in ((player1, player2), (player2, player1)):
+                try:
+                    await me.send(
+                        f"⚔️ レーティング対戦のマッチが成立しました！\n"
+                        f"相手: {opp.display_name}\n→ {thread.jump_url}"
                     )
+                except (discord.Forbidden, discord.HTTPException) as e:
+                    logger.info(f"rating_match DM通知失敗（DM閉鎖の可能性）: user={me.id} error={e}")
 
             logger.info(
                 f"rating_match_created: thread={thread.id} p1={player1.id} p2={player2.id}"
@@ -755,31 +747,28 @@ class RatingRoomCog(commands.Cog):
 
     @app_commands.command(
         name="setup_rating_room",
-        description="レーティングルームの投稿先フォーラム・通知先を設定します（管理者用）",
+        description="レーティングルームの対戦スレッド投稿先フォーラムを設定します（管理者用）",
     )
     @app_commands.describe(
         forum_channel="マッチ成立時にスレッドを作成するフォーラムチャンネル",
-        notify_channel="マッチ成立時に通知を送るチャンネル（省略可）",
-        mention_role="通知時にメンションするロール（省略可）",
     )
     @app_commands.default_permissions(manage_guild=True)
     async def setup_rating_room(
         self,
         interaction: discord.Interaction,
         forum_channel: discord.ForumChannel,
-        notify_channel: discord.TextChannel | None = None,
-        mention_role: discord.Role | None = None,
     ):
         await db_manager.save_rating_settings(
             guild_id=interaction.guild_id,
             forum_channel_id=forum_channel.id,
-            notify_channel_id=notify_channel.id if notify_channel else None,
-            mention_role_id=mention_role.id if mention_role else None,
+            notify_channel_id=None,
+            mention_role_id=None,
         )
 
-        desc = f"マッチ成立時、{forum_channel.mention} に対戦スレッドを作成します。"
-        if notify_channel:
-            desc += f"\n通知は {notify_channel.mention} に送信されます。"
+        desc = (
+            f"マッチ成立時、{forum_channel.mention} に対戦スレッドを作成します。\n"
+            "マッチ成立の通知は、マッチした本人2人にのみDMで送られます（他の場所には公開されません）。"
+        )
 
         embed = discord.Embed(
             title="✅ レーティングルーム設定完了",
