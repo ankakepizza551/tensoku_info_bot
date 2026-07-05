@@ -140,14 +140,17 @@ class RatingMatchReportModal(discord.ui.Modal):
         profile1: dict,
         profile2: dict,
         panel_message: discord.Message,
+        previous_match_id: int | None = None,
     ):
-        super().__init__(title="📝 レーティング対戦結果の報告")
+        title = "🔁 レーティング対戦結果の修正" if previous_match_id else "📝 レーティング対戦結果の報告"
+        super().__init__(title=title)
         self.thread_id = thread_id
         self.player1 = player1
         self.player2 = player2
         self.profile1 = profile1
         self.profile2 = profile2
         self.panel_message = panel_message
+        self.previous_match_id = previous_match_id
 
         self.my_score_input = discord.ui.TextInput(
             label="自分の勝利本数", placeholder="例: 2", min_length=1, max_length=2
@@ -182,6 +185,10 @@ class RatingMatchReportModal(discord.ui.Modal):
         await interaction.response.defer()
 
         try:
+            if self.previous_match_id is not None:
+                # 修正の場合、まず以前の登録を削除してレート変動を巻き戻してから登録し直す
+                await db_manager.delete_match(self.previous_match_id)
+
             old_rank1 = get_rank((await db_manager.get_or_create_user(self.player1.id, self.player1.display_name))["rating"])
             old_rank2 = get_rank((await db_manager.get_or_create_user(self.player2.id, self.player2.display_name))["rating"])
 
@@ -215,9 +222,13 @@ class RatingMatchReportModal(discord.ui.Modal):
                     return ""
                 return f" 🎉 ランク変動: `{old_rank}` → `{new_rank}`"
 
+            is_correction = self.previous_match_id is not None
             result_embed = discord.Embed(
-                title="📊 対戦結果 (レーティングルーム)",
-                description=f"{winner_text}\n**Match ID:** `{result['match_id']}`",
+                title="🔁 対戦結果 修正 (レーティングルーム)" if is_correction else "📊 対戦結果 (レーティングルーム)",
+                description=(
+                    (f"以前の登録（Match ID: `{self.previous_match_id}`）を修正しました。\n" if is_correction else "")
+                    + f"{winner_text}\n**Match ID:** `{result['match_id']}`"
+                ),
                 color=discord.Color.from_rgb(155, 89, 182),
             )
             result_embed.add_field(
@@ -245,16 +256,19 @@ class RatingMatchReportModal(discord.ui.Modal):
 
             closed_embed = discord.Embed(
                 title="✅ レーティング対戦終了",
-                description=f"{self.player1.mention} vs {self.player2.mention}\n対戦が完了しました。",
+                description=f"{self.player1.mention} vs {self.player2.mention}\n対戦が完了しました。\n"
+                            "結果が間違っていた場合は「🔁 結果を修正する」ボタンから訂正できます。",
                 color=discord.Color.from_rgb(127, 140, 141),
             )
             completed_view = RatingThreadCompletedView(self.thread_id)
             await self.panel_message.edit(embed=closed_embed, view=completed_view)
             await db_manager.update_rating_thread_status(self.thread_id, "completed")
+            await db_manager.update_rating_thread_match_id(self.thread_id, result["match_id"])
 
             await interaction.followup.send(embed=result_embed)
             logger.info(
-                f"rating_match_report: thread={self.thread_id} match={result['match_id']}"
+                f"rating_match_report: thread={self.thread_id} match={result['match_id']} "
+                f"correction={is_correction}"
             )
 
         except Exception as e:
@@ -345,6 +359,13 @@ class RatingThreadCompletedView(discord.ui.View):
         super().__init__(timeout=None)
         self.thread_id = thread_id
 
+        correct_btn = discord.ui.Button(
+            label="🔁 結果を修正する",
+            style=discord.ButtonStyle.primary,
+            custom_id=f"rt_correct:{thread_id}",
+        )
+        correct_btn.callback = self._correct_callback
+
         stats_btn = discord.ui.Button(
             label="📊 自分のスタッツ",
             style=discord.ButtonStyle.secondary,
@@ -359,8 +380,55 @@ class RatingThreadCompletedView(discord.ui.View):
         )
         delete_btn.callback = _delete_rating_callback
 
+        self.add_item(correct_btn)
         self.add_item(stats_btn)
         self.add_item(delete_btn)
+
+    async def _correct_callback(self, interaction: discord.Interaction):
+        thread_info = await db_manager.get_rating_thread(self.thread_id)
+        if thread_info is None:
+            await interaction.response.send_message(
+                "❌ スレッド情報が見つかりません。", ephemeral=True
+            )
+            return
+
+        player1_id = thread_info["player1_id"]
+        player2_id = thread_info["player2_id"]
+        is_participant = interaction.user.id in (player1_id, player2_id)
+        has_manage = interaction.user.guild_permissions.manage_threads
+        if not (is_participant or has_manage):
+            await interaction.response.send_message(
+                "❌ 対戦当事者またはモデレーターのみ結果を修正できます。", ephemeral=True
+            )
+            return
+
+        player1 = interaction.guild.get_member(player1_id)
+        player2 = interaction.guild.get_member(player2_id)
+        if player1 is None or player2 is None:
+            await interaction.response.send_message(
+                "❌ プレイヤー情報の取得に失敗しました。サーバーからの退出が原因の可能性があります。",
+                ephemeral=True,
+            )
+            return
+
+        profile1 = await db_manager.get_rating_profile(player1_id)
+        profile2 = await db_manager.get_rating_profile(player2_id)
+        if profile1 is None or profile2 is None:
+            await interaction.response.send_message(
+                "❌ プロフィール情報が見つかりません。管理者にご連絡ください。", ephemeral=True
+            )
+            return
+
+        modal = RatingMatchReportModal(
+            thread_id=self.thread_id,
+            player1=player1,
+            player2=player2,
+            profile1=profile1,
+            profile2=profile2,
+            panel_message=interaction.message,
+            previous_match_id=thread_info.get("last_match_id"),
+        )
+        await interaction.response.send_modal(modal)
 
 
 # ─────────────────────────────────────────────
@@ -591,12 +659,15 @@ class RatingRoomCog(commands.Cog):
         self.bot = bot
 
     async def cog_load(self):
-        threads = await db_manager.get_active_rating_threads()
+        threads = await db_manager.get_all_rating_threads()
         restored = 0
         for t in threads:
-            if t["status"] != "in_progress":
+            if t["status"] == "in_progress":
+                view = RatingThreadInProgressView(t["thread_id"], t["player1_id"], t["player2_id"])
+            elif t["status"] == "completed":
+                view = RatingThreadCompletedView(t["thread_id"])
+            else:
                 continue
-            view = RatingThreadInProgressView(t["thread_id"], t["player1_id"], t["player2_id"])
             self.bot.add_view(view, message_id=t["panel_message_id"])
             restored += 1
         if restored:

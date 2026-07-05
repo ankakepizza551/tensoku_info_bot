@@ -282,9 +282,19 @@ async def init_db():
                 player1_id INTEGER NOT NULL,
                 player2_id INTEGER NOT NULL,
                 status TEXT DEFAULT 'in_progress',
+                last_match_id INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        await db.commit()
+
+        # rating_threads に last_match_id（直近に登録した戦績のID。結果修正時の巻き戻しに使用）が存在しない場合は追加
+        async with db.execute("PRAGMA table_info(rating_threads)") as cursor:
+            rt_columns = [row[1] for row in await cursor.fetchall()]
+        if "last_match_id" not in rt_columns:
+            await db.execute("ALTER TABLE rating_threads ADD COLUMN last_match_id INTEGER")
+            await db.commit()
+
         # レーティングルーム: ギルドごとの設定（投稿先フォーラム・通知先）
         await db.execute("""
             CREATE TABLE IF NOT EXISTS rating_settings (
@@ -1183,10 +1193,24 @@ async def get_active_rating_threads() -> list:
         ) as cursor:
             return [dict(r) for r in await cursor.fetchall()]
 
+async def get_all_rating_threads() -> list:
+    """状態を問わず全ての対戦スレッドを取得する（再起動時のView再登録用）"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM rating_threads") as cursor:
+            return [dict(r) for r in await cursor.fetchall()]
+
 async def update_rating_thread_status(thread_id: int, status: str) -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "UPDATE rating_threads SET status = ? WHERE thread_id = ?", (status, thread_id)
+        )
+        await db.commit()
+
+async def update_rating_thread_match_id(thread_id: int, match_id: int) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE rating_threads SET last_match_id = ? WHERE thread_id = ?", (match_id, thread_id)
         )
         await db.commit()
 
