@@ -18,14 +18,24 @@ BEST_OF = "2先 (2本先取)"
 #  共通ユーティリティ
 # ─────────────────────────────────────────────
 
+DIFF_PRESETS = [50.0, 100.0, 150.0, 200.0, 300.0, 500.0, 9999.0]
+DEFAULT_MAX_DIFF = 100.0
+
+
+def _format_max_diff(max_diff: float) -> str:
+    return "指定なし（誰とでもOK）" if max_diff >= 9999.0 else f"±{int(max_diff)}"
+
+
 def _profile_summary(profile: dict, rating: float) -> str:
     rank = get_rank(rating)
+    max_diff = profile.get("max_rating_diff") or DEFAULT_MAX_DIFF
     return (
         f"1戦目のキャラ: **{profile['main_character']}**\n"
         f"IP/接続: `{profile['ip_info'] or '未設定'}`\n"
         f"オートパンチ: `{profile['autopunch'] or '未設定'}`\n"
         f"giuroll: `{profile['giuroll'] or '未設定'}`\n"
         f"コメント: {profile['comment'] or 'なし'}\n"
+        f"希望レート差: `{_format_max_diff(max_diff)}`\n"
         f"レート: `{round(rating, 1)}` (ランク: `{rank}`)"
     )
 
@@ -357,10 +367,51 @@ class RatingThreadCompletedView(discord.ui.View):
 #  プロフィール登録モーダル
 # ─────────────────────────────────────────────
 
+class RatingDiffSelect(discord.ui.Select):
+    def __init__(self, current: float | None = None):
+        options = [
+            discord.SelectOption(
+                label=_format_max_diff(v),
+                value=str(v),
+                default=(current is not None and current == v),
+            )
+            for v in DIFF_PRESETS
+        ]
+        super().__init__(
+            placeholder="希望する最大レート差を選択してください",
+            min_values=1,
+            max_values=1,
+            options=options,
+            custom_id="rating_panel:diff_select",
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        chosen = float(self.values[0])
+        updated = await db_manager.save_rating_max_diff(interaction.user.id, chosen)
+        if not updated:
+            await interaction.response.send_message(
+                "❌ 先に `/rating_register` でプロフィールを登録してください。", ephemeral=True
+            )
+            return
+        await interaction.response.send_message(
+            f"✅ 希望レート差を `{_format_max_diff(chosen)}` に設定しました。", ephemeral=True
+        )
+        logger.info(f"rating_set_diff: user={interaction.user.id} max_diff={chosen}")
+
+
+class RatingDiffSelectView(discord.ui.View):
+    """希望レート差の選択のみを行う短命View（モーダルの5項目制限を避けるため別ステップにしている）"""
+
+    def __init__(self, current: float | None = None):
+        super().__init__(timeout=300)
+        self.add_item(RatingDiffSelect(current))
+
+
 class RatingRegisterModal(discord.ui.Modal):
     def __init__(self, existing: dict | None = None):
         super().__init__(title="⚔️ レーティングルーム プロフィール登録")
         e = existing or {}
+        self.existing_max_diff = e.get("max_rating_diff") or DEFAULT_MAX_DIFF
 
         self.main_character = discord.ui.TextInput(
             label="1戦目のキャラ（必須・変更不可の対戦キャラ）",
@@ -421,6 +472,7 @@ class RatingRegisterModal(discord.ui.Modal):
             autopunch=self.autopunch.value.strip(),
             giuroll=self.giuroll.value.strip(),
             comment=self.comment.value.strip(),
+            max_rating_diff=self.existing_max_diff,
         )
 
         embed = discord.Embed(
@@ -434,8 +486,14 @@ class RatingRegisterModal(discord.ui.Modal):
         embed.add_field(name="オートパンチ", value=self.autopunch.value.strip(), inline=True)
         embed.add_field(name="giuroll", value=self.giuroll.value.strip(), inline=True)
         embed.add_field(name="コメント", value=self.comment.value.strip() or "なし", inline=False)
+        embed.add_field(name="希望レート差", value=_format_max_diff(self.existing_max_diff), inline=True)
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(
+            "🎚 希望する最大レート差も設定できます（未選択の場合は上記のままです）:",
+            view=RatingDiffSelectView(self.existing_max_diff),
+            ephemeral=True,
+        )
         logger.info(f"rating_register: user={interaction.user.id} char={char}")
 
     async def on_error(self, interaction: discord.Interaction, error: Exception):
@@ -483,10 +541,18 @@ class RatingPanelView(discord.ui.View):
         )
         status_btn.callback = self._status_callback
 
+        diff_btn = discord.ui.Button(
+            label="🎚 希望レート差を設定",
+            style=discord.ButtonStyle.secondary,
+            custom_id="rating_panel:set_diff",
+        )
+        diff_btn.callback = self._diff_callback
+
         self.add_item(register_btn)
         self.add_item(join_btn)
         self.add_item(leave_btn)
         self.add_item(status_btn)
+        self.add_item(diff_btn)
 
     async def _register_callback(self, interaction: discord.Interaction):
         existing = await db_manager.get_rating_profile(interaction.user.id)
@@ -500,6 +566,20 @@ class RatingPanelView(discord.ui.View):
 
     async def _status_callback(self, interaction: discord.Interaction):
         await self.cog._handle_queue_status(interaction)
+
+    async def _diff_callback(self, interaction: discord.Interaction):
+        profile = await db_manager.get_rating_profile(interaction.user.id)
+        if profile is None:
+            await interaction.response.send_message(
+                "❌ 先に `/rating_register` でプロフィールを登録してください。", ephemeral=True
+            )
+            return
+        current = profile.get("max_rating_diff") or DEFAULT_MAX_DIFF
+        await interaction.response.send_message(
+            "🎚 希望する最大レート差を選択してください:",
+            view=RatingDiffSelectView(current),
+            ephemeral=True,
+        )
 
 
 # ─────────────────────────────────────────────
@@ -539,7 +619,7 @@ class RatingRoomCog(commands.Cog):
 
     @app_commands.command(
         name="rating_queue_join",
-        description="レーティングルームのマッチングキューに参加します（レート差100以内で自動マッチング）",
+        description="レーティングルームのマッチングキューに参加します（お互いの希望レート差の範囲内で自動マッチング）",
     )
     async def rating_queue_join(self, interaction: discord.Interaction):
         await self._handle_queue_join(interaction)
@@ -579,14 +659,17 @@ class RatingRoomCog(commands.Cog):
 
         user_info = await db_manager.get_or_create_user(interaction.user.id, interaction.user.display_name)
         rating = user_info["rating"]
+        my_max_diff = profile.get("max_rating_diff") or DEFAULT_MAX_DIFF
 
-        candidate = await db_manager.find_rating_match(interaction.guild_id, interaction.user.id, rating, max_diff=100.0)
+        candidate = await db_manager.find_rating_match(
+            interaction.guild_id, interaction.user.id, rating, max_diff=my_max_diff
+        )
 
         if candidate is None:
             await db_manager.join_rating_queue(interaction.user.id, interaction.guild_id)
             await _sync_queue_board(self.bot, interaction.guild)
             await interaction.followup.send(
-                "⏳ マッチングキューに参加しました。レート差100以内の相手が見つかり次第、対戦スレッドを作成します。",
+                "⏳ マッチングキューに参加しました。希望レート差の範囲内の相手が見つかり次第、対戦スレッドを作成します。",
                 ephemeral=True,
             )
             logger.info(f"rating_queue_join: user={interaction.user.id} rating={rating} (待機)")
@@ -600,7 +683,7 @@ class RatingRoomCog(commands.Cog):
             await db_manager.join_rating_queue(interaction.user.id, interaction.guild_id)
             await _sync_queue_board(self.bot, interaction.guild)
             await interaction.followup.send(
-                "⏳ マッチングキューに参加しました。レート差100以内の相手が見つかり次第、対戦スレッドを作成します。",
+                "⏳ マッチングキューに参加しました。希望レート差の範囲内の相手が見つかり次第、対戦スレッドを作成します。",
                 ephemeral=True,
             )
             return
@@ -830,9 +913,10 @@ class RatingRoomCog(commands.Cog):
             description=(
                 "下のボタンから操作できます。\n"
                 "・📝 プロフィール登録/変更: 1戦目のキャラ等の登録・変更\n"
-                "・⚔️ キューに参加: マッチングキューに参加（レート差100以内で自動マッチング）\n"
+                "・⚔️ キューに参加: マッチングキューに参加（希望レート差の範囲内で自動マッチング）\n"
                 "・🚪 キューから抜ける: キューをキャンセル\n"
-                "・📋 待機状況を見る: 現在の待機人数・待機者一覧を確認"
+                "・📋 待機状況を見る: 現在の待機人数・待機者一覧を確認\n"
+                "・🎚 希望レート差を設定: マッチングを許容するレート差の範囲を変更"
             ),
             color=discord.Color.from_rgb(155, 89, 182),
         )
