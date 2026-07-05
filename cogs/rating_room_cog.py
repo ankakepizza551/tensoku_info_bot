@@ -829,10 +829,12 @@ class RatingRoomCog(commands.Cog):
         name="setup_rating_panel",
         description="登録・キュー参加・キュー離脱・状況確認をボタンで行える操作パネルをこのチャンネルに設置します（管理者用）",
     )
-    @app_commands.describe(channel="操作パネルを設置するチャンネル")
+    @app_commands.describe(channel="操作パネルを設置するチャンネル（スレッドも指定可）")
     @app_commands.default_permissions(manage_guild=True)
     async def setup_rating_panel(
-        self, interaction: discord.Interaction, channel: discord.TextChannel
+        self,
+        interaction: discord.Interaction,
+        channel: discord.TextChannel | discord.Thread,
     ):
         embed = discord.Embed(
             title="⚔️ レーティングルーム 操作パネル",
