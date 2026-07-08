@@ -1,0 +1,1162 @@
+import logging
+import random
+
+import discord
+from discord import app_commands
+from discord.ext import commands
+from database import db_manager
+
+logger = logging.getLogger("TensokuMatchBot")
+
+STRENGTH_LABELS = {1: "初級者", 2: "中級者", 3: "上級者"}
+TEAM_LABELS = ["Aチーム", "Bチーム", "Cチーム", "Dチーム"]
+TEAM_EMOJIS = ["🟥", "🟦", "🟨", "🟩"]
+
+
+def _neighbors(idx: int) -> list:
+    """5x5グリッド(行優先インデックス)における上下左右の隣接マスを返す"""
+    r, c = divmod(idx, 5)
+    result = []
+    if r > 0:
+        result.append(idx - 5)
+    if r < 4:
+        result.append(idx + 5)
+    if c > 0:
+        result.append(idx - 1)
+    if c < 4:
+        result.append(idx + 1)
+    return result
+
+
+def _compute_frontier(owner_map: dict, team_index: int) -> set:
+    """指定チームの陣地に隣接する、まだそのチームが所有していないマスの集合を返す"""
+    frontier = set()
+    for idx in range(25):
+        if owner_map.get(idx) == team_index:
+            for n in _neighbors(idx):
+                if owner_map.get(n) != team_index:
+                    frontier.add(n)
+    return frontier
+
+
+def _strength_label(team_row: dict) -> str:
+    if team_row["is_captain"]:
+        return "大将 (強さ5)"
+    return STRENGTH_LABELS.get(team_row["strength"], str(team_row["strength"]))
+
+
+def _build_register_confirmation_embed(
+    strength: int, ip_info: str, autopunch: str, giuroll: str, comment: str
+) -> discord.Embed:
+    embed = discord.Embed(
+        title="✅ 陣取りゲーム プロフィールを登録しました",
+        description="内容を変更したい場合は、再度 `/territory_register` または登録パネルのボタンから実行してください。",
+        color=discord.Color.from_rgb(46, 204, 113),
+    )
+    embed.add_field(name="強さ", value=STRENGTH_LABELS.get(strength, str(strength)), inline=True)
+    embed.add_field(name="IP/接続情報", value=ip_info, inline=True)
+    embed.add_field(name="オートパンチ", value=autopunch, inline=True)
+    embed.add_field(name="giuroll", value=giuroll, inline=True)
+    embed.add_field(name="一言", value=comment or "なし", inline=False)
+    return embed
+
+
+def _build_teams_embed(teams: list) -> discord.Embed:
+    """teams: [[{"user_id","username","strength","is_captain"}, ...], ...]"""
+    embed = discord.Embed(
+        title="🗺️ 陣取りゲーム チーム分け結果",
+        color=discord.Color.from_rgb(52, 152, 219),
+    )
+    for i, members in enumerate(teams):
+        total = sum(m["strength"] for m in members)
+        sorted_members = sorted(members, key=lambda m: (not m["is_captain"], -m["strength"]))
+        lines = []
+        for m in sorted_members:
+            if m["is_captain"]:
+                lines.append(f"👑 {m['username']} (`大将`)")
+            else:
+                label = STRENGTH_LABELS.get(m["strength"], str(m["strength"]))
+                lines.append(f"　{m['username']} (`{label}`)")
+        embed.add_field(
+            name=f"{TEAM_LABELS[i]}（{len(members)}人 / 合計強さ{total}）",
+            value="\n".join(lines) or "なし",
+            inline=False,
+        )
+    return embed
+
+
+class TerritoryCellButton(discord.ui.Button):
+    def __init__(self, cell_index: int, label: str, style: discord.ButtonStyle, disabled: bool, row: int):
+        super().__init__(style=style, label=label, disabled=disabled, row=row)
+        self.cell_index = cell_index
+
+    async def callback(self, interaction: discord.Interaction):
+        await self.view.handle_click(interaction, self.cell_index)
+
+
+class TerritoryExpansionView(discord.ui.View):
+    """勝利チームが侵略度分だけ隣接マスを自由に選んで塗り替えるための一時View（隣接候補が侵略度を超える場合のみ使用）"""
+
+    def __init__(self, cog: "TerritoryCog", guild_id: int, team_index: int, owner_map: dict, frontier: set, remaining: int):
+        super().__init__(timeout=600)
+        self.cog = cog
+        self.guild_id = guild_id
+        self.team_index = team_index
+        self.owner_map = dict(owner_map)
+        self.frontier = set(frontier)
+        self.remaining = remaining
+        self.message: discord.Message | None = None
+        self._build_buttons()
+
+    def _build_buttons(self):
+        self.clear_items()
+        for idx in range(25):
+            r, c = divmod(idx, 5)
+            if idx in self.frontier and self.remaining > 0:
+                btn = TerritoryCellButton(idx, f"{r + 1}-{c + 1}", discord.ButtonStyle.success, False, r)
+            else:
+                owner = self.owner_map.get(idx)
+                label = TEAM_EMOJIS[owner] if owner is not None else "⬜"
+                btn = TerritoryCellButton(idx, label, discord.ButtonStyle.secondary, True, r)
+            self.add_item(btn)
+
+    async def handle_click(self, interaction: discord.Interaction, cell_index: int):
+        team_row = await db_manager.get_territory_team_of_user(self.guild_id, interaction.user.id)
+        if team_row is None or team_row["team_index"] != self.team_index:
+            await interaction.response.send_message(
+                "❌ 勝利チームのメンバーのみ選択できます。", ephemeral=True
+            )
+            return
+
+        if cell_index not in self.frontier or self.remaining <= 0:
+            await interaction.response.send_message("❌ このマスは選択できません。", ephemeral=True)
+            return
+
+        await db_manager.set_territory_grid_cell(self.guild_id, cell_index, self.team_index)
+        self.owner_map[cell_index] = self.team_index
+        self.frontier.discard(cell_index)
+        self.remaining -= 1
+
+        for n in _neighbors(cell_index):
+            if self.owner_map.get(n) != self.team_index:
+                self.frontier.add(n)
+            else:
+                self.frontier.discard(n)
+
+        finished = self.remaining <= 0 or not self.frontier
+        self._build_buttons()
+        embed = await self.cog._build_grid_embed(self.guild_id)
+
+        if finished:
+            self.stop()
+            content = f"✅ {TEAM_LABELS[self.team_index]} の陣地拡張が完了しました！"
+        else:
+            content = f"🗺️ 残り{self.remaining}マス選択できます（{TEAM_LABELS[self.team_index]}）"
+
+        await interaction.response.edit_message(content=content, embed=embed, view=self)
+        logger.info(
+            f"territory_expand: guild={self.guild_id} team={self.team_index} cell={cell_index} "
+            f"remaining={self.remaining}"
+        )
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(
+                    content="⏰ 選択時間が終了しました。残りのマスは選択されませんでした。", view=self
+                )
+            except discord.HTTPException:
+                pass
+
+
+class TerritoryRegisterModal(discord.ui.Modal):
+    def __init__(self, existing: dict | None = None):
+        super().__init__(title="🗺️ 陣取りゲーム プロフィール登録")
+        e = existing or {}
+
+        self.strength_input = discord.ui.TextInput(
+            label="強さ（1:初級者 / 2:中級者 / 3:上級者）",
+            placeholder="1〜3の数字を入力",
+            default=str(e["strength"]) if e.get("strength") else "",
+            required=True,
+            max_length=1,
+        )
+        self.ip_input = discord.ui.TextInput(
+            label="IP/接続情報",
+            placeholder="例: IP対応可 / クラ専のみ",
+            default=e.get("ip_info", ""),
+            required=True,
+            max_length=100,
+        )
+        self.autopunch_input = discord.ui.TextInput(
+            label="オートパンチ有無",
+            placeholder="あり / なし",
+            default=e.get("autopunch", ""),
+            required=True,
+            max_length=10,
+        )
+        self.giuroll_input = discord.ui.TextInput(
+            label="giuroll有無",
+            placeholder="あり / なし",
+            default=e.get("giuroll", ""),
+            required=True,
+            max_length=10,
+        )
+        self.comment_input = discord.ui.TextInput(
+            label="一言コメント（任意）",
+            style=discord.TextStyle.paragraph,
+            default=e.get("comment", ""),
+            required=False,
+            max_length=200,
+        )
+
+        self.add_item(self.strength_input)
+        self.add_item(self.ip_input)
+        self.add_item(self.autopunch_input)
+        self.add_item(self.giuroll_input)
+        self.add_item(self.comment_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        raw_strength = self.strength_input.value.strip()
+        if raw_strength not in ("1", "2", "3"):
+            await interaction.response.send_message(
+                "❌ 強さは1〜3の数字で入力してください（1:初級者 / 2:中級者 / 3:上級者）。",
+                ephemeral=True,
+            )
+            return
+
+        strength = int(raw_strength)
+        ip_clean = self.ip_input.value.strip()
+        autopunch_clean = self.autopunch_input.value.strip()
+        giuroll_clean = self.giuroll_input.value.strip()
+        comment_clean = self.comment_input.value.strip()
+
+        await db_manager.save_territory_profile(
+            user_id=interaction.user.id,
+            username=interaction.user.display_name,
+            strength=strength,
+            ip_info=ip_clean,
+            autopunch=autopunch_clean,
+            giuroll=giuroll_clean,
+            comment=comment_clean,
+        )
+
+        embed = _build_register_confirmation_embed(
+            strength, ip_clean, autopunch_clean, giuroll_clean, comment_clean
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        logger.info(f"territory_register(modal): user={interaction.user.id} strength={strength}")
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
+        logger.error(f"TerritoryRegisterModal on_error: {error}")
+        if not interaction.response.is_done():
+            await interaction.response.send_message("❌ 登録中にエラーが発生しました。", ephemeral=True)
+
+
+class TerritoryRegisterPanelView(discord.ui.View):
+    """固定custom_idを使うグローバル永続View。再起動後もボタンが機能する"""
+
+    def __init__(self):
+        super().__init__(timeout=None)
+        btn = discord.ui.Button(
+            label="📝 陣取りゲーム プロフィール登録/変更",
+            style=discord.ButtonStyle.primary,
+            custom_id="territory_panel:register",
+        )
+        btn.callback = self._register_callback
+        self.add_item(btn)
+
+    async def _register_callback(self, interaction: discord.Interaction):
+        existing = await db_manager.get_territory_profile(interaction.user.id)
+        await interaction.response.send_modal(TerritoryRegisterModal(existing))
+
+
+class TerritoryInfoPanelView(discord.ui.View):
+    """プロフィール確認・登録者一覧・チーム分け結果をまとめた固定custom_idの永続View"""
+
+    def __init__(self, cog: "TerritoryCog"):
+        super().__init__(timeout=None)
+        self.cog = cog
+
+        profile_btn = discord.ui.Button(
+            label="👤 自分のプロフィール確認",
+            style=discord.ButtonStyle.primary,
+            custom_id="territory_panel:profile",
+        )
+        profile_btn.callback = self._profile_callback
+        self.add_item(profile_btn)
+
+        list_btn = discord.ui.Button(
+            label="📋 登録者一覧",
+            style=discord.ButtonStyle.secondary,
+            custom_id="territory_panel:list",
+        )
+        list_btn.callback = self._list_callback
+        self.add_item(list_btn)
+
+        teams_btn = discord.ui.Button(
+            label="🗂️ チーム分け結果",
+            style=discord.ButtonStyle.secondary,
+            custom_id="territory_panel:teams",
+        )
+        teams_btn.callback = self._teams_callback
+        self.add_item(teams_btn)
+
+    async def _profile_callback(self, interaction: discord.Interaction):
+        embed = await self.cog._build_profile_embed(interaction.user)
+        if embed is None:
+            await interaction.response.send_message(
+                "❌ まだプロフィールを登録していません。先に登録ボタンから登録してください。",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    async def _list_callback(self, interaction: discord.Interaction):
+        embed = await self.cog._build_list_embed()
+        if embed is None:
+            await interaction.response.send_message("まだ誰も登録していません。", ephemeral=True)
+            return
+        await interaction.response.send_message(embed=embed)
+
+    async def _teams_callback(self, interaction: discord.Interaction):
+        embed = await self.cog._build_current_teams_embed(interaction.guild_id)
+        if embed is None:
+            await interaction.response.send_message(
+                "まだチーム分けが行われていません。管理者に `/territory_draw` の実施を依頼してください。",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.send_message(embed=embed)
+
+
+class TerritoryOpponentSelect(discord.ui.UserSelect):
+    def __init__(self):
+        super().__init__(placeholder="対戦相手を選択してください", min_values=1, max_values=1)
+
+    async def callback(self, interaction: discord.Interaction):
+        view: "TerritoryReportSetupView" = self.view
+        view.opponent = self.values[0]
+        for child in view.children:
+            if isinstance(child, discord.ui.Button):
+                child.disabled = False
+        await interaction.response.edit_message(
+            content=f"対戦相手: **{view.opponent.display_name}**\nあなたから見た結果を選んでください。",
+            view=view,
+        )
+
+
+class TerritoryResultButton(discord.ui.Button):
+    def __init__(self, result_value: str, label: str, style: discord.ButtonStyle):
+        super().__init__(label=label, style=style, disabled=True)
+        self.result_value = result_value
+
+    async def callback(self, interaction: discord.Interaction):
+        view: "TerritoryReportSetupView" = self.view
+        if view.opponent is None:
+            await interaction.response.send_message("❌ 先に対戦相手を選択してください。", ephemeral=True)
+            return
+
+        guild_id = interaction.guild_id
+        outcome = await view.cog._process_territory_report(
+            guild_id, interaction.user, view.opponent, self.result_value
+        )
+
+        if not outcome["ok"]:
+            await interaction.response.send_message(outcome["error"], ephemeral=True)
+            return
+
+        await interaction.response.edit_message(content="✅ 対戦結果を送信しました。", view=None)
+        await interaction.followup.send(embed=outcome["embed"])
+        await view.cog._expand_territory(interaction, guild_id, outcome["winner_team_index"], outcome["invasion"])
+        await view.cog._check_game_finished(
+            interaction, guild_id, outcome["fought_before"], outcome["winner_id"], outcome["loser_id"]
+        )
+        view.stop()
+
+
+class TerritoryReportSetupView(discord.ui.View):
+    """対戦相手をUserSelectで選び、勝ち/負けボタンで確定する一時View（モーダルはユーザー選択に非対応のため）"""
+
+    def __init__(self, cog: "TerritoryCog"):
+        super().__init__(timeout=120)
+        self.cog = cog
+        self.opponent: discord.Member | None = None
+        self.add_item(TerritoryOpponentSelect())
+        self.add_item(TerritoryResultButton("win", "✅ 勝ち", discord.ButtonStyle.success))
+        self.add_item(TerritoryResultButton("lose", "❌ 負け", discord.ButtonStyle.danger))
+
+
+class TerritoryMatchDeleteModal(discord.ui.Modal):
+    def __init__(self, cog: "TerritoryCog"):
+        super().__init__(title="🗑️ 陣取りゲーム 対戦結果の削除")
+        self.cog = cog
+        self.match_id_input = discord.ui.TextInput(
+            label="削除する対戦ID (Match ID)",
+            placeholder="例: 12",
+            required=True,
+            max_length=10,
+        )
+        self.add_item(self.match_id_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        raw = self.match_id_input.value.strip()
+        if not raw.isdigit():
+            await interaction.response.send_message("❌ 対戦IDは数字で入力してください。", ephemeral=True)
+            return
+        await self.cog._process_match_delete(interaction, int(raw))
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
+        logger.error(f"TerritoryMatchDeleteModal on_error: {error}")
+        if not interaction.response.is_done():
+            await interaction.response.send_message("❌ 削除中にエラーが発生しました。", ephemeral=True)
+
+
+class TerritoryBattlePanelView(discord.ui.View):
+    """対戦結果報告・戦況表示・対戦削除・陣地マップをまとめた固定custom_idの永続View"""
+
+    def __init__(self, cog: "TerritoryCog"):
+        super().__init__(timeout=None)
+        self.cog = cog
+
+        report_btn = discord.ui.Button(
+            label="⚔️ 対戦結果を報告",
+            style=discord.ButtonStyle.success,
+            custom_id="territory_panel:report",
+        )
+        report_btn.callback = self._report_callback
+        self.add_item(report_btn)
+
+        score_btn = discord.ui.Button(
+            label="📊 現在の戦況",
+            style=discord.ButtonStyle.primary,
+            custom_id="territory_panel:score",
+        )
+        score_btn.callback = self._score_callback
+        self.add_item(score_btn)
+
+        delete_btn = discord.ui.Button(
+            label="🗑️ 対戦結果を削除",
+            style=discord.ButtonStyle.danger,
+            custom_id="territory_panel:match_delete",
+        )
+        delete_btn.callback = self._delete_callback
+        self.add_item(delete_btn)
+
+        map_btn = discord.ui.Button(
+            label="🗺️ 陣地マップ",
+            style=discord.ButtonStyle.secondary,
+            custom_id="territory_panel:map",
+        )
+        map_btn.callback = self._map_callback
+        self.add_item(map_btn)
+
+    async def _report_callback(self, interaction: discord.Interaction):
+        await interaction.response.send_message(
+            "対戦相手と結果を選択してください:",
+            view=TerritoryReportSetupView(self.cog),
+            ephemeral=True,
+        )
+
+    async def _score_callback(self, interaction: discord.Interaction):
+        embed = await self.cog._build_score_embed(interaction.guild_id)
+        if embed is None:
+            await interaction.response.send_message(
+                "まだチーム分けが行われていません。管理者に `/territory_draw` の実施を依頼してください。",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.send_message(embed=embed)
+
+    async def _delete_callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(TerritoryMatchDeleteModal(self.cog))
+
+    async def _map_callback(self, interaction: discord.Interaction):
+        embed = await self.cog._build_grid_embed(interaction.guild_id)
+        if embed is None:
+            await interaction.response.send_message(
+                "まだ陣地マップが初期化されていません。管理者に `/territory_draw` の実施を依頼してください。",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.send_message(embed=embed)
+
+
+class TerritoryCog(commands.Cog):
+    """陣取りゲーム用のプロフィール登録・チーム分け・対戦報告・陣地マップ機能"""
+
+    def __init__(self, bot):
+        self.bot = bot
+
+    async def cog_load(self):
+        self.bot.add_view(TerritoryRegisterPanelView())
+        self.bot.add_view(TerritoryInfoPanelView(self))
+        self.bot.add_view(TerritoryBattlePanelView(self))
+
+    # ── プロフィール登録 ──────────────────────────────────────────
+
+    @app_commands.command(
+        name="territory_register",
+        description="陣取りゲーム用のプロフィールを登録・更新します"
+    )
+    @app_commands.describe(
+        strength="自己申告の強さ",
+        ip="IP対応可否や接続情報",
+        autopunch="オートパンチの有無",
+        giu="giuroll(遅延判定)の有無",
+        comment="一言コメント（任意）",
+    )
+    @app_commands.choices(
+        strength=[
+            app_commands.Choice(name="初級者", value=1),
+            app_commands.Choice(name="中級者", value=2),
+            app_commands.Choice(name="上級者", value=3),
+        ],
+        autopunch=[
+            app_commands.Choice(name="あり", value="あり"),
+            app_commands.Choice(name="なし", value="なし"),
+        ],
+        giu=[
+            app_commands.Choice(name="あり", value="あり"),
+            app_commands.Choice(name="なし", value="なし"),
+        ],
+    )
+    async def territory_register(
+        self,
+        interaction: discord.Interaction,
+        strength: app_commands.Choice[int],
+        ip: str,
+        autopunch: app_commands.Choice[str],
+        giu: app_commands.Choice[str],
+        comment: str = None,
+    ):
+        ip_clean = ip.strip()
+        comment_clean = (comment or "").strip()
+
+        await db_manager.save_territory_profile(
+            user_id=interaction.user.id,
+            username=interaction.user.display_name,
+            strength=strength.value,
+            ip_info=ip_clean,
+            autopunch=autopunch.value,
+            giuroll=giu.value,
+            comment=comment_clean,
+        )
+
+        embed = _build_register_confirmation_embed(
+            strength.value, ip_clean, autopunch.value, giu.value, comment_clean
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(
+        name="setup_territory_register_panel",
+        description="陣取りゲームのプロフィール登録ボタンをこのチャンネルに設置します（管理者用）"
+    )
+    @app_commands.describe(channel="設置するチャンネル（スレッドも指定可）")
+    @app_commands.default_permissions(manage_guild=True)
+    async def setup_territory_register_panel(
+        self, interaction: discord.Interaction, channel: discord.TextChannel | discord.Thread
+    ):
+        embed = discord.Embed(
+            title="🗺️ 陣取りゲーム プロフィール登録",
+            description="下のボタンから強さ・接続情報などを登録/変更できます。",
+            color=discord.Color.from_rgb(52, 152, 219),
+        )
+        try:
+            await channel.send(embed=embed, view=TerritoryRegisterPanelView())
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                f"❌ {channel.mention} にメッセージを送信する権限がありません。", ephemeral=True
+            )
+            return
+
+        await interaction.response.send_message(
+            f"✅ プロフィール登録ボタンを {channel.mention} に設置しました。", ephemeral=True
+        )
+        logger.info(f"setup_territory_register_panel: guild={interaction.guild_id} channel={channel.id}")
+
+    # ── 情報パネル（プロフィール確認・一覧・チーム分け） ────────────
+
+    @app_commands.command(
+        name="setup_territory_info_panel",
+        description="陣取りゲームの情報確認パネル（プロフィール・登録者一覧・チーム分け）をこのチャンネルに設置します（管理者用）"
+    )
+    @app_commands.describe(channel="設置するチャンネル（スレッドも指定可）")
+    @app_commands.default_permissions(manage_guild=True)
+    async def setup_territory_info_panel(
+        self, interaction: discord.Interaction, channel: discord.TextChannel | discord.Thread
+    ):
+        embed = discord.Embed(
+            title="🗺️ 陣取りゲーム 情報パネル",
+            description=(
+                "・👤 自分のプロフィール確認\n"
+                "・📋 登録者一覧\n"
+                "・🗂️ チーム分け結果"
+            ),
+            color=discord.Color.from_rgb(52, 152, 219),
+        )
+        try:
+            await channel.send(embed=embed, view=TerritoryInfoPanelView(self))
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                f"❌ {channel.mention} にメッセージを送信する権限がありません。", ephemeral=True
+            )
+            return
+
+        await interaction.response.send_message(
+            f"✅ 情報パネルを {channel.mention} に設置しました。", ephemeral=True
+        )
+        logger.info(f"setup_territory_info_panel: guild={interaction.guild_id} channel={channel.id}")
+
+    async def _build_profile_embed(self, target: discord.Member) -> discord.Embed | None:
+        profile = await db_manager.get_territory_profile(target.id)
+        if profile is None:
+            return None
+
+        embed = discord.Embed(
+            title=f"🗺️ {target.display_name} さんの陣取りプロフィール",
+            color=discord.Color.from_rgb(52, 152, 219),
+        )
+        embed.add_field(
+            name="強さ", value=STRENGTH_LABELS.get(profile["strength"], "不明"), inline=True
+        )
+        embed.add_field(name="IP/接続情報", value=profile["ip_info"] or "未設定", inline=True)
+        embed.add_field(name="オートパンチ", value=profile["autopunch"] or "未設定", inline=True)
+        embed.add_field(name="giuroll", value=profile["giuroll"] or "未設定", inline=True)
+        embed.add_field(name="一言", value=profile["comment"] or "なし", inline=False)
+        return embed
+
+    @app_commands.command(
+        name="territory_profile",
+        description="陣取りゲームのプロフィールを確認します"
+    )
+    @app_commands.describe(user="確認したいユーザー（省略時は自分）")
+    async def territory_profile(
+        self, interaction: discord.Interaction, user: discord.Member = None
+    ):
+        target = user or interaction.user
+        embed = await self._build_profile_embed(target)
+        if embed is None:
+            await interaction.response.send_message(
+                f"❌ {target.display_name} さんはまだ陣取りゲームのプロフィールを登録していません。",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    async def _build_list_embed(self) -> discord.Embed | None:
+        profiles = await db_manager.get_all_territory_profiles()
+        if not profiles:
+            return None
+
+        embed = discord.Embed(
+            title="🗺️ 陣取りゲーム 登録者一覧",
+            description=f"登録者数: {len(profiles)}人",
+            color=discord.Color.from_rgb(52, 152, 219),
+        )
+
+        # 強さ別(上級者→初級者の順)にまとめて表示
+        for level in (3, 2, 1):
+            label = STRENGTH_LABELS[level]
+            members = [p["username"] for p in profiles if p["strength"] == level]
+            if members:
+                embed.add_field(
+                    name=f"{label}（{len(members)}人）",
+                    value="\n".join(members),
+                    inline=False,
+                )
+        return embed
+
+    @app_commands.command(
+        name="territory_list",
+        description="陣取りゲームに登録済みの全プロフィールを一覧表示します"
+    )
+    async def territory_list(self, interaction: discord.Interaction):
+        embed = await self._build_list_embed()
+        if embed is None:
+            await interaction.response.send_message(
+                "まだ誰も登録していません。", ephemeral=True
+            )
+            return
+        await interaction.response.send_message(embed=embed)
+
+    # ── チーム抽選 ────────────────────────────────────────────────
+
+    @app_commands.command(
+        name="territory_draw",
+        description="陣取りゲームのチーム分け抽選を行います（管理者用）"
+    )
+    @app_commands.describe(
+        role="参加者を示すロール",
+        team_count="チーム数",
+    )
+    @app_commands.choices(
+        team_count=[
+            app_commands.Choice(name="2チーム", value=2),
+            app_commands.Choice(name="4チーム", value=4),
+        ]
+    )
+    @app_commands.default_permissions(manage_guild=True)
+    async def territory_draw(
+        self,
+        interaction: discord.Interaction,
+        role: discord.Role,
+        team_count: app_commands.Choice[int],
+    ):
+        n_teams = team_count.value
+        candidates = [m for m in role.members if not m.bot]
+
+        profiles = {}
+        missing = []
+        for m in candidates:
+            p = await db_manager.get_territory_profile(m.id)
+            if p is None:
+                missing.append(m)
+            else:
+                profiles[m.id] = p
+
+        participants = [m for m in candidates if m.id in profiles]
+
+        if len(participants) < n_teams:
+            await interaction.response.send_message(
+                f"❌ {role.mention} の登録済み参加者が{n_teams}人未満です（現在{len(participants)}人）。",
+                ephemeral=True,
+            )
+            return
+
+        captain_pool = [m for m in participants if profiles[m.id]["strength"] == 3]
+        if len(captain_pool) < n_teams:
+            await interaction.response.send_message(
+                f"❌ 大将候補（上級者）が{n_teams}人未満です（現在{len(captain_pool)}人）。"
+                "上級者の登録者を増やしてから再度実行してください。",
+                ephemeral=True,
+            )
+            return
+
+        random.shuffle(captain_pool)
+        captains = captain_pool[:n_teams]
+        captain_ids = {c.id for c in captains}
+
+        remaining = [m for m in participants if m.id not in captain_ids]
+        random.shuffle(remaining)
+        remaining.sort(key=lambda m: profiles[m.id]["strength"], reverse=True)
+
+        teams = [[] for _ in range(n_teams)]
+        team_totals = [0] * n_teams
+        team_counts = [0] * n_teams
+
+        for i, c in enumerate(captains):
+            teams[i].append({"user_id": c.id, "username": c.display_name, "strength": 5, "is_captain": True})
+            team_totals[i] += 5
+            team_counts[i] += 1
+
+        for m in remaining:
+            s = profiles[m.id]["strength"]
+            idx = min(range(n_teams), key=lambda i: (team_totals[i], team_counts[i]))
+            teams[idx].append({"user_id": m.id, "username": m.display_name, "strength": s, "is_captain": False})
+            team_totals[idx] += s
+            team_counts[idx] += 1
+
+        await db_manager.clear_territory_teams(interaction.guild_id)
+        for i, members_in_team in enumerate(teams):
+            for md in members_in_team:
+                await db_manager.add_territory_team_member(
+                    guild_id=interaction.guild_id,
+                    team_index=i,
+                    user_id=md["user_id"],
+                    username=md["username"],
+                    strength=md["strength"],
+                    is_captain=md["is_captain"],
+                )
+
+        await db_manager.init_territory_grid(interaction.guild_id, n_teams)
+
+        embed = _build_teams_embed(teams)
+        if missing:
+            names = "、".join(m.display_name for m in missing)
+            embed.set_footer(text=f"未登録のため除外: {names}")
+
+        await interaction.response.send_message(embed=embed)
+        logger.info(
+            f"territory_draw: guild={interaction.guild_id} teams={n_teams} "
+            f"participants={len(participants)} captains={[c.id for c in captains]}"
+        )
+
+    async def _build_current_teams_embed(self, guild_id: int) -> discord.Embed | None:
+        rows = await db_manager.get_territory_teams(guild_id)
+        if not rows:
+            return None
+
+        n_teams = max(r["team_index"] for r in rows) + 1
+        teams = [[] for _ in range(n_teams)]
+        for r in rows:
+            teams[r["team_index"]].append({
+                "user_id": r["user_id"],
+                "username": r["username"],
+                "strength": r["strength"],
+                "is_captain": bool(r["is_captain"]),
+            })
+        return _build_teams_embed(teams)
+
+    @app_commands.command(
+        name="territory_teams",
+        description="陣取りゲームの現在のチーム分け結果を表示します"
+    )
+    async def territory_teams(self, interaction: discord.Interaction):
+        embed = await self._build_current_teams_embed(interaction.guild_id)
+        if embed is None:
+            await interaction.response.send_message(
+                "まだチーム分けが行われていません。管理者に `/territory_draw` の実行を依頼してください。",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.send_message(embed=embed)
+
+    # ── 陣地マップ ────────────────────────────────────────────────
+
+    async def _build_grid_embed(self, guild_id: int) -> discord.Embed | None:
+        grid = await db_manager.get_territory_grid(guild_id)
+        if not grid:
+            return None
+
+        owner_map = {g["cell_index"]: g["team_index"] for g in grid}
+        n_teams = max(owner_map.values()) + 1
+
+        rows_lines = [
+            " ".join(TEAM_EMOJIS[owner_map[r * 5 + c]] for c in range(5))
+            for r in range(5)
+        ]
+
+        counts = [0] * n_teams
+        for v in owner_map.values():
+            counts[v] += 1
+
+        embed = discord.Embed(
+            title="🗺️ 陣取りゲーム 陣地マップ (5×5)",
+            description="\n".join(rows_lines),
+            color=discord.Color.from_rgb(52, 152, 219),
+        )
+        embed.set_footer(
+            text=" / ".join(f"{TEAM_LABELS[i]} {counts[i]}マス" for i in range(n_teams))
+        )
+        return embed
+
+    async def _expand_territory(
+        self, interaction: discord.Interaction, guild_id: int, team_index: int, invasion_score: int
+    ):
+        grid = await db_manager.get_territory_grid(guild_id)
+        if not grid:
+            return  # マップ未初期化（旧チーム分けなど）の場合は何もしない
+
+        owner_map = {g["cell_index"]: g["team_index"] for g in grid}
+        frontier = _compute_frontier(owner_map, team_index)
+
+        if not frontier:
+            await interaction.followup.send(
+                f"🗺️ {TEAM_LABELS[team_index]} はこれ以上隣接する陣地がないため、拡張できませんでした。"
+            )
+            return
+
+        if len(frontier) <= invasion_score:
+            for idx in frontier:
+                await db_manager.set_territory_grid_cell(guild_id, idx, team_index)
+            embed = await self._build_grid_embed(guild_id)
+            await interaction.followup.send(
+                content=f"🗺️ {TEAM_LABELS[team_index]} が侵略度{invasion_score}分の隣接陣地を全て獲得しました！",
+                embed=embed,
+            )
+            return
+
+        view = TerritoryExpansionView(self, guild_id, team_index, owner_map, frontier, invasion_score)
+        embed = await self._build_grid_embed(guild_id)
+        msg = await interaction.followup.send(
+            content=(
+                f"🗺️ {TEAM_LABELS[team_index]} は侵略度{invasion_score}分、"
+                f"下のボタンから塗り替えるマスを{invasion_score}個選んでください。"
+            ),
+            embed=embed,
+            view=view,
+        )
+        view.message = msg
+
+    @app_commands.command(
+        name="territory_map",
+        description="陣取りゲームの現在の陣地マップを表示します"
+    )
+    async def territory_map(self, interaction: discord.Interaction):
+        embed = await self._build_grid_embed(interaction.guild_id)
+        if embed is None:
+            await interaction.response.send_message(
+                "まだ陣地マップが初期化されていません。管理者に `/territory_draw` の実施を依頼してください。",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.send_message(embed=embed)
+
+    # ── 対戦報告・戦況・削除 ──────────────────────────────────────
+
+    async def _build_score_embed(self, guild_id: int) -> discord.Embed | None:
+        rows = await db_manager.get_territory_teams(guild_id)
+        if not rows:
+            return None
+
+        n_teams = max(r["team_index"] for r in rows) + 1
+        totals = await db_manager.get_territory_invasion_totals(guild_id)
+        fought = await db_manager.get_territory_fought_user_ids(guild_id)
+
+        teams_members = [[] for _ in range(n_teams)]
+        for r in rows:
+            teams_members[r["team_index"]].append(r)
+
+        embed = discord.Embed(
+            title="⚔️ 陣取りゲーム 現在の戦況",
+            color=discord.Color.from_rgb(230, 126, 34),
+        )
+        for i, members in enumerate(teams_members):
+            score = totals.get(i, 0)
+            remaining = [m["username"] for m in members if m["user_id"] not in fought]
+            done = len(members) - len(remaining)
+            value = f"侵略度合計: **{score}**\n出場済み: {done}/{len(members)}人"
+            if remaining:
+                value += f"\n未出場: {', '.join(remaining)}"
+            embed.add_field(name=TEAM_LABELS[i], value=value, inline=False)
+        return embed
+
+    async def _process_territory_report(
+        self, guild_id: int, reporter: discord.Member, opponent: discord.Member, result_value: str
+    ) -> dict:
+        """対戦結果の検証・侵略度計算・DB登録を行い、結果を辞書で返す（Discord応答は呼び出し元が行う）"""
+        if opponent.id == reporter.id:
+            return {"ok": False, "error": "❌ 自分自身を対戦相手に指定できません。"}
+
+        reporter_team = await db_manager.get_territory_team_of_user(guild_id, reporter.id)
+        opponent_team = await db_manager.get_territory_team_of_user(guild_id, opponent.id)
+
+        if reporter_team is None or opponent_team is None:
+            return {
+                "ok": False,
+                "error": "❌ 両者ともチーム分け済みである必要があります。`/territory_draw` の実施後に対戦してください。",
+            }
+
+        if reporter_team["team_index"] == opponent_team["team_index"]:
+            return {"ok": False, "error": "❌ 同じチームのメンバー同士は対戦できません。"}
+
+        fought = await db_manager.get_territory_fought_user_ids(guild_id)
+        if reporter.id in fought:
+            return {"ok": False, "error": "❌ あなたはすでに出場済みです（1人1回までの出場です）。"}
+        if opponent.id in fought:
+            return {
+                "ok": False,
+                "error": f"❌ {opponent.display_name} さんはすでに出場済みです（1人1回までの出場です）。",
+            }
+
+        if result_value == "win":
+            winner, loser = reporter, opponent
+            winner_team, loser_team = reporter_team, opponent_team
+        else:
+            winner, loser = opponent, reporter
+            winner_team, loser_team = opponent_team, reporter_team
+
+        winner_strength = winner_team["strength"]
+        loser_strength = loser_team["strength"]
+        base = loser_strength
+        bonus = max(0, loser_strength - winner_strength)
+        captain_defeated = bool(loser_team["is_captain"])
+        invasion = base + bonus + (2 if captain_defeated else 0)
+
+        match_id = await db_manager.add_territory_match(
+            guild_id=guild_id,
+            reporter_id=reporter.id,
+            winner_id=winner.id,
+            loser_id=loser.id,
+            winner_team=winner_team["team_index"],
+            loser_team=loser_team["team_index"],
+            invasion_score=invasion,
+            captain_defeated=captain_defeated,
+        )
+
+        bonus_parts = [f"基礎点 {base}"]
+        if bonus > 0:
+            bonus_parts.append(f"下剋上ボーナス +{bonus}")
+        if captain_defeated:
+            bonus_parts.append("大将撃破ボーナス +2")
+
+        embed = discord.Embed(
+            title="⚔️ 陣取りゲーム 対戦結果",
+            description=f"{TEAM_LABELS[winner_team['team_index']]} **{winner.display_name}** の勝利！\n"
+                        f"**Match ID:** `{match_id}`",
+            color=discord.Color.from_rgb(46, 204, 113),
+        )
+        embed.add_field(
+            name=f"勝者: {winner.display_name} ({TEAM_LABELS[winner_team['team_index']]})",
+            value=_strength_label(winner_team),
+            inline=True,
+        )
+        loser_value = _strength_label(loser_team) + (" 👑撃破" if captain_defeated else "")
+        embed.add_field(
+            name=f"敗者: {loser.display_name} ({TEAM_LABELS[loser_team['team_index']]})",
+            value=loser_value,
+            inline=True,
+        )
+        embed.add_field(
+            name="侵略度",
+            value=f"**{invasion}** ({' + '.join(bonus_parts)})",
+            inline=False,
+        )
+        embed.set_footer(
+            text=f"報告者: {reporter.display_name} | 間違えた場合は /territory_match_delete で削除できます"
+        )
+
+        logger.info(
+            f"territory_report: guild={guild_id} match={match_id} winner={winner.id} loser={loser.id} "
+            f"invasion={invasion} captain_defeated={captain_defeated}"
+        )
+
+        return {
+            "ok": True,
+            "embed": embed,
+            "winner_team_index": winner_team["team_index"],
+            "invasion": invasion,
+            "fought_before": fought,
+            "winner_id": winner.id,
+            "loser_id": loser.id,
+        }
+
+    async def _check_game_finished(
+        self, interaction: discord.Interaction, guild_id: int, fought_before: set, winner_id: int, loser_id: int
+    ):
+        all_rows = await db_manager.get_territory_teams(guild_id)
+        new_fought = fought_before | {winner_id, loser_id}
+        if len(new_fought) < len(all_rows):
+            return
+
+        totals = await db_manager.get_territory_invasion_totals(guild_id)
+        n_teams = max(r["team_index"] for r in all_rows) + 1
+        lines = [f"{TEAM_LABELS[i]}: 侵略度 **{totals.get(i, 0)}**" for i in range(n_teams)]
+        best_score = max(totals.get(i, 0) for i in range(n_teams))
+        winners = [TEAM_LABELS[i] for i in range(n_teams) if totals.get(i, 0) == best_score]
+        final_embed = discord.Embed(
+            title="🏁 全員出場完了！陣取りゲーム終了",
+            description="\n".join(lines) + f"\n\n🏆 勝利チーム: **{'・'.join(winners)}**",
+            color=discord.Color.gold(),
+        )
+        await interaction.followup.send(embed=final_embed)
+        logger.info(f"territory_game_finished: guild={guild_id} winners={winners}")
+
+    @app_commands.command(
+        name="territory_report",
+        description="陣取りゲームの1対1対戦結果を登録します"
+    )
+    @app_commands.describe(
+        opponent="対戦相手",
+        result="自分から見た結果",
+    )
+    @app_commands.choices(
+        result=[
+            app_commands.Choice(name="勝ち", value="win"),
+            app_commands.Choice(name="負け", value="lose"),
+        ]
+    )
+    async def territory_report(
+        self,
+        interaction: discord.Interaction,
+        opponent: discord.Member,
+        result: app_commands.Choice[str],
+    ):
+        guild_id = interaction.guild_id
+        outcome = await self._process_territory_report(guild_id, interaction.user, opponent, result.value)
+
+        if not outcome["ok"]:
+            await interaction.response.send_message(outcome["error"], ephemeral=True)
+            return
+
+        await interaction.response.send_message(embed=outcome["embed"])
+        await self._expand_territory(interaction, guild_id, outcome["winner_team_index"], outcome["invasion"])
+        await self._check_game_finished(
+            interaction, guild_id, outcome["fought_before"], outcome["winner_id"], outcome["loser_id"]
+        )
+
+    @app_commands.command(
+        name="territory_score",
+        description="陣取りゲームの現在の戦況（侵略度・出場状況）を表示します"
+    )
+    async def territory_score(self, interaction: discord.Interaction):
+        embed = await self._build_score_embed(interaction.guild_id)
+        if embed is None:
+            await interaction.response.send_message(
+                "まだチーム分けが行われていません。管理者に `/territory_draw` の実施を依頼してください。",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.send_message(embed=embed)
+
+    async def _process_match_delete(self, interaction: discord.Interaction, match_id: int):
+        match_data = await db_manager.get_territory_match(match_id)
+        if not match_data:
+            await interaction.response.send_message(
+                f"❌ 対戦ID `{match_id}` の記録が見つかりませんでした。", ephemeral=True
+            )
+            return
+
+        is_reporter = match_data["reporter_id"] == interaction.user.id
+        is_admin = interaction.user.guild_permissions.administrator
+        if not (is_reporter or is_admin):
+            await interaction.response.send_message(
+                "❌ この記録を削除する権限がありません（報告者本人または管理者のみ削除可能です）。",
+                ephemeral=True,
+            )
+            return
+
+        await db_manager.delete_territory_match(match_id)
+        await interaction.response.send_message(
+            f"🗑️ 対戦ID `{match_id}` の記録を削除しました。該当メンバーは再度出場可能になります。"
+        )
+        logger.info(f"territory_match_delete: match={match_id} by user={interaction.user.id}")
+
+    @app_commands.command(
+        name="territory_match_delete",
+        description="間違えて登録した陣取りゲームの対戦結果をID指定で削除します"
+    )
+    @app_commands.describe(match_id="削除する対戦のID")
+    async def territory_match_delete(self, interaction: discord.Interaction, match_id: int):
+        await self._process_match_delete(interaction, match_id)
+
+    # ── 対戦パネル（報告・戦況・削除・マップ） ────────────────────
+
+    @app_commands.command(
+        name="setup_territory_battle_panel",
+        description="陣取りゲームの対戦パネル（結果報告・戦況・削除・マップ）をこのチャンネルに設置します（管理者用）"
+    )
+    @app_commands.describe(channel="設置するチャンネル（スレッドも指定可）")
+    @app_commands.default_permissions(manage_guild=True)
+    async def setup_territory_battle_panel(
+        self, interaction: discord.Interaction, channel: discord.TextChannel | discord.Thread
+    ):
+        embed = discord.Embed(
+            title="⚔️ 陣取りゲーム 対戦パネル",
+            description=(
+                "・⚔️ 対戦結果を報告\n"
+                "・📊 現在の戦況\n"
+                "・🗑️ 対戦結果を削除\n"
+                "・🗺️ 陣地マップ"
+            ),
+            color=discord.Color.from_rgb(230, 126, 34),
+        )
+        try:
+            await channel.send(embed=embed, view=TerritoryBattlePanelView(self))
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                f"❌ {channel.mention} にメッセージを送信する権限がありません。", ephemeral=True
+            )
+            return
+
+        await interaction.response.send_message(
+            f"✅ 対戦パネルを {channel.mention} に設置しました。", ephemeral=True
+        )
+        logger.info(f"setup_territory_battle_panel: guild={interaction.guild_id} channel={channel.id}")
+
+
+async def setup(bot):
+    await bot.add_cog(TerritoryCog(bot))

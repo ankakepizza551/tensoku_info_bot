@@ -38,6 +38,72 @@ async def init_db():
         """)
         await db.commit()
 
+        # 陣取りゲーム プロフィールテーブル
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS territory_profiles (
+                user_id INTEGER PRIMARY KEY,
+                username TEXT NOT NULL,
+                strength INTEGER NOT NULL,
+                ip_info TEXT,
+                autopunch TEXT,
+                giuroll TEXT,
+                comment TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        await db.commit()
+
+        # 陣取りゲーム チーム抽選結果テーブル
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS territory_teams (
+                guild_id INTEGER NOT NULL,
+                team_index INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                username TEXT NOT NULL,
+                strength INTEGER NOT NULL,
+                is_captain INTEGER DEFAULT 0,
+                PRIMARY KEY (guild_id, user_id)
+            )
+            """
+        )
+        await db.commit()
+
+        # 陣取りゲーム 対戦結果テーブル
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS territory_matches (
+                match_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id INTEGER NOT NULL,
+                reporter_id INTEGER NOT NULL,
+                winner_id INTEGER NOT NULL,
+                loser_id INTEGER NOT NULL,
+                winner_team INTEGER NOT NULL,
+                loser_team INTEGER NOT NULL,
+                invasion_score INTEGER NOT NULL,
+                captain_defeated INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        await db.commit()
+
+        # 陣取りゲーム 陣地マップ(5x5グリッド)テーブル
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS territory_grid (
+                guild_id INTEGER NOT NULL,
+                cell_index INTEGER NOT NULL,
+                team_index INTEGER NOT NULL,
+                PRIMARY KEY (guild_id, cell_index)
+            )
+            """
+        )
+        await db.commit()
+
         # --- 既存データベースへのマイグレーション処理 ---
         # users テーブルに rating カラムが存在しない場合は追加
         async with db.execute("PRAGMA table_info(users)") as cursor:
@@ -1270,3 +1336,218 @@ async def get_rating_queue_board(guild_id: int) -> dict | None:
         ) as cursor:
             row = await cursor.fetchone()
         return dict(row) if row else None
+
+
+# ── 陣取りゲーム: プロフィール ────────────────────────────────────
+
+async def save_territory_profile(
+    user_id: int, username: str, strength: int, ip_info: str,
+    autopunch: str, giuroll: str, comment: str = "",
+) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT INTO territory_profiles
+               (user_id, username, strength, ip_info, autopunch, giuroll, comment, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(user_id) DO UPDATE SET
+               username=excluded.username,
+               strength=excluded.strength,
+               ip_info=excluded.ip_info,
+               autopunch=excluded.autopunch,
+               giuroll=excluded.giuroll,
+               comment=excluded.comment,
+               updated_at=CURRENT_TIMESTAMP""",
+            (user_id, username, strength, ip_info, autopunch, giuroll, comment),
+        )
+        await db.commit()
+
+async def get_territory_profile(user_id: int) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM territory_profiles WHERE user_id = ?", (user_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        return dict(row) if row else None
+
+async def get_all_territory_profiles() -> list:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM territory_profiles ORDER BY strength DESC, username ASC"
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
+
+async def delete_territory_profile(user_id: int) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "DELETE FROM territory_profiles WHERE user_id = ?", (user_id,)
+        ) as cursor:
+            await db.commit()
+            return cursor.rowcount > 0
+
+# ── 陣取りゲーム: チーム抽選結果 ───────────────────────────────────
+
+async def clear_territory_teams(guild_id: int) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM territory_teams WHERE guild_id = ?", (guild_id,))
+        await db.commit()
+
+async def add_territory_team_member(
+    guild_id: int, team_index: int, user_id: int, username: str, strength: int, is_captain: bool
+) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT OR REPLACE INTO territory_teams
+               (guild_id, team_index, user_id, username, strength, is_captain)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (guild_id, team_index, user_id, username, strength, int(is_captain)),
+        )
+        await db.commit()
+
+async def get_territory_teams(guild_id: int) -> list:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            """SELECT * FROM territory_teams WHERE guild_id = ?
+               ORDER BY team_index, is_captain DESC, strength DESC""",
+            (guild_id,),
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+# ── 陣取りゲーム: 対戦結果 ─────────────────────────────────────────
+
+async def get_territory_team_of_user(guild_id: int, user_id: int) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM territory_teams WHERE guild_id = ? AND user_id = ?",
+            (guild_id, user_id),
+        ) as cursor:
+            row = await cursor.fetchone()
+        return dict(row) if row else None
+
+async def add_territory_match(
+    guild_id: int, reporter_id: int, winner_id: int, loser_id: int,
+    winner_team: int, loser_team: int, invasion_score: int, captain_defeated: bool,
+) -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            """INSERT INTO territory_matches
+               (guild_id, reporter_id, winner_id, loser_id, winner_team, loser_team, invasion_score, captain_defeated)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (guild_id, reporter_id, winner_id, loser_id, winner_team, loser_team,
+             invasion_score, int(captain_defeated)),
+        )
+        await db.commit()
+        return cursor.lastrowid
+
+async def get_territory_match(match_id: int) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM territory_matches WHERE match_id = ?", (match_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        return dict(row) if row else None
+
+async def delete_territory_match(match_id: int) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "DELETE FROM territory_matches WHERE match_id = ?", (match_id,)
+        ) as cursor:
+            await db.commit()
+            return cursor.rowcount > 0
+
+async def get_territory_matches(guild_id: int) -> list:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM territory_matches WHERE guild_id = ? ORDER BY created_at",
+            (guild_id,),
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+async def get_territory_fought_user_ids(guild_id: int) -> set:
+    matches = await get_territory_matches(guild_id)
+    fought = set()
+    for m in matches:
+        fought.add(m["winner_id"])
+        fought.add(m["loser_id"])
+    return fought
+
+async def get_territory_invasion_totals(guild_id: int) -> dict:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            """SELECT winner_team, SUM(invasion_score) as total
+               FROM territory_matches WHERE guild_id = ? GROUP BY winner_team""",
+            (guild_id,),
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return {r["winner_team"]: r["total"] for r in rows}
+
+# ── 陣取りゲーム: 陣地マップ (5x5グリッド) ──────────────────────────
+
+def _territory_grid_layout(team_count: int) -> list:
+    """5x5グリッド(25マス、行優先インデックス0〜24)の初期配置を返す"""
+    if team_count == 2:
+        # 上(13マス) / 下(12マス) の分割
+        return [0 if i < 13 else 1 for i in range(25)]
+
+    # 4チーム: 四隅から各6マス程度の連結した領域に分割
+    layout = []
+    for r in range(5):
+        for c in range(5):
+            if r < 2 and c < 2:
+                q = 0
+            elif r < 2 and c > 2:
+                q = 1
+            elif r > 2 and c < 2:
+                q = 2
+            elif r > 2 and c > 2:
+                q = 3
+            elif r == 2 and c < 2:
+                q = 2 if c == 0 else 0
+            elif r == 2 and c > 2:
+                q = 1 if c == 3 else 3
+            elif c == 2 and r < 2:
+                q = 0 if r == 0 else 1
+            elif c == 2 and r > 2:
+                q = 2 if r == 3 else 3
+            else:
+                q = 0  # 中央マス(2,2)
+            layout.append(q)
+    return layout
+
+async def init_territory_grid(guild_id: int, team_count: int) -> None:
+    assignment = _territory_grid_layout(team_count)
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM territory_grid WHERE guild_id = ?", (guild_id,))
+        await db.executemany(
+            "INSERT INTO territory_grid (guild_id, cell_index, team_index) VALUES (?, ?, ?)",
+            [(guild_id, idx, team) for idx, team in enumerate(assignment)],
+        )
+        await db.commit()
+
+async def get_territory_grid(guild_id: int) -> list:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM territory_grid WHERE guild_id = ? ORDER BY cell_index", (guild_id,)
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+async def set_territory_grid_cell(guild_id: int, cell_index: int, team_index: int) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT INTO territory_grid (guild_id, cell_index, team_index)
+               VALUES (?, ?, ?)
+               ON CONFLICT(guild_id, cell_index) DO UPDATE SET team_index=excluded.team_index""",
+            (guild_id, cell_index, team_index),
+        )
+        await db.commit()
