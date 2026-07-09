@@ -11,6 +11,13 @@ logger = logging.getLogger("TensokuMatchBot")
 STRENGTH_LABELS = {1: "初級者", 2: "中級者", 3: "上級者"}
 TEAM_LABELS = ["Aチーム", "Bチーム", "Cチーム", "Dチーム"]
 TEAM_EMOJIS = ["🟥", "🟦", "🟨", "🟩"]
+TEAM_ROLE_COLORS = [
+    discord.Color.from_rgb(231, 76, 60),   # A: 赤
+    discord.Color.from_rgb(52, 152, 219),  # B: 青
+    discord.Color.from_rgb(241, 196, 15),  # C: 黄
+    discord.Color.from_rgb(46, 204, 113),  # D: 緑
+]
+PARTICIPANT_ROLE_NAME = "陣取り参加者"
 
 
 def _neighbors(idx: int) -> list:
@@ -61,7 +68,7 @@ def _build_register_confirmation_embed(
     return embed
 
 
-def _build_teams_embed(teams: list) -> discord.Embed:
+def _build_teams_embed(teams: list, channel_map: dict = None) -> discord.Embed:
     """teams: [[{"user_id","username","strength","is_captain"}, ...], ...]"""
     embed = discord.Embed(
         title="🗺️ 陣取りゲーム チーム分け結果",
@@ -77,8 +84,11 @@ def _build_teams_embed(teams: list) -> discord.Embed:
             else:
                 label = STRENGTH_LABELS.get(m["strength"], str(m["strength"]))
                 lines.append(f"　{m['username']} (`{label}`)")
+        field_name = f"{TEAM_LABELS[i]}（{len(members)}人 / 合計強さ{total}）"
+        if channel_map and channel_map.get(i):
+            field_name += f" → {channel_map[i].mention}"
         embed.add_field(
-            name=f"{TEAM_LABELS[i]}（{len(members)}人 / 合計強さ{total}）",
+            name=field_name,
             value="\n".join(lines) or "なし",
             inline=False,
         )
@@ -172,8 +182,9 @@ class TerritoryExpansionView(discord.ui.View):
 
 
 class TerritoryRegisterModal(discord.ui.Modal):
-    def __init__(self, existing: dict | None = None):
+    def __init__(self, cog: "TerritoryCog", existing: dict | None = None):
         super().__init__(title="🗺️ 陣取りゲーム プロフィール登録")
+        self.cog = cog
         e = existing or {}
 
         self.strength_input = discord.ui.TextInput(
@@ -247,6 +258,7 @@ class TerritoryRegisterModal(discord.ui.Modal):
             strength, ip_clean, autopunch_clean, giuroll_clean, comment_clean
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
+        await self.cog._grant_participant_role(interaction.user)
         logger.info(f"territory_register(modal): user={interaction.user.id} strength={strength}")
 
     async def on_error(self, interaction: discord.Interaction, error: Exception):
@@ -258,8 +270,9 @@ class TerritoryRegisterModal(discord.ui.Modal):
 class TerritoryRegisterPanelView(discord.ui.View):
     """固定custom_idを使うグローバル永続View。再起動後もボタンが機能する"""
 
-    def __init__(self):
+    def __init__(self, cog: "TerritoryCog"):
         super().__init__(timeout=None)
+        self.cog = cog
         btn = discord.ui.Button(
             label="📝 陣取りゲーム プロフィール登録/変更",
             style=discord.ButtonStyle.primary,
@@ -270,7 +283,7 @@ class TerritoryRegisterPanelView(discord.ui.View):
 
     async def _register_callback(self, interaction: discord.Interaction):
         existing = await db_manager.get_territory_profile(interaction.user.id)
-        await interaction.response.send_modal(TerritoryRegisterModal(existing))
+        await interaction.response.send_modal(TerritoryRegisterModal(self.cog, existing))
 
 
 class TerritoryInfoPanelView(discord.ui.View):
@@ -491,9 +504,151 @@ class TerritoryCog(commands.Cog):
         self.bot = bot
 
     async def cog_load(self):
-        self.bot.add_view(TerritoryRegisterPanelView())
+        self.bot.add_view(TerritoryRegisterPanelView(self))
         self.bot.add_view(TerritoryInfoPanelView(self))
         self.bot.add_view(TerritoryBattlePanelView(self))
+
+    async def _ensure_participant_role(self, guild: discord.Guild) -> discord.Role | None:
+        """陣取りゲーム参加者ロールを取得する。存在しなければ自動作成する"""
+        settings = await db_manager.get_territory_settings(guild.id)
+        role = None
+        if settings and settings.get("participant_role_id"):
+            role = guild.get_role(settings["participant_role_id"])
+
+        if role is None:
+            try:
+                role = await guild.create_role(
+                    name=PARTICIPANT_ROLE_NAME,
+                    color=discord.Color.from_rgb(149, 165, 166),
+                    mentionable=True,
+                    reason="陣取りゲーム参加者ロールの自動作成",
+                )
+            except discord.Forbidden:
+                logger.warning(f"territory: 参加者ロール作成失敗（権限不足） guild={guild.id}")
+                return None
+            await db_manager.save_territory_settings(guild.id, participant_role_id=role.id)
+
+        return role
+
+    async def _ensure_participant_channel(
+        self, guild: discord.Guild, role: discord.Role
+    ) -> discord.TextChannel | None:
+        """参加者ロール共通の雑談チャンネルを取得する。存在しなければ自動作成する"""
+        settings = await db_manager.get_territory_settings(guild.id)
+        channel = None
+        if settings and settings.get("participant_channel_id"):
+            channel = guild.get_channel(settings["participant_channel_id"])
+
+        if channel is None:
+            overwrites = {
+                guild.default_role: discord.PermissionOverwrite(view_channel=False),
+                role: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+            }
+            try:
+                channel = await guild.create_text_channel(
+                    name="陣取り-参加者雑談",
+                    overwrites=overwrites,
+                    reason="陣取りゲーム 参加者共通チャンネルの自動作成",
+                )
+            except discord.Forbidden:
+                logger.warning(f"territory: 参加者雑談チャンネル作成失敗（権限不足） guild={guild.id}")
+                return None
+            await db_manager.save_territory_settings(guild.id, participant_channel_id=channel.id)
+
+        return channel
+
+    async def _grant_participant_role(self, member: discord.Member):
+        role = await self._ensure_participant_role(member.guild)
+        if role is None:
+            return
+
+        await self._ensure_participant_channel(member.guild, role)
+
+        if role in member.roles:
+            return
+        try:
+            await member.add_roles(role, reason="陣取りゲーム プロフィール登録")
+        except discord.Forbidden:
+            logger.warning(f"territory: 参加者ロール付与失敗（権限不足） user={member.id}")
+
+    async def _sync_team_roles_and_channels(
+        self, guild: discord.Guild, teams: list, category: discord.CategoryChannel | None
+    ) -> tuple:
+        """チームロール・チームチャンネルを取得/作成し、メンバーへのロール付け替えまで行う"""
+        n_teams = len(teams)
+        existing_roles = {r["team_index"]: r for r in await db_manager.get_territory_team_roles(guild.id)}
+
+        team_roles: list[discord.Role | None] = []
+        team_channels: list[discord.TextChannel | None] = []
+
+        for i in range(n_teams):
+            existing = existing_roles.get(i)
+
+            role = guild.get_role(existing["role_id"]) if existing and existing.get("role_id") else None
+            if role is None:
+                try:
+                    role = await guild.create_role(
+                        name=TEAM_LABELS[i],
+                        color=TEAM_ROLE_COLORS[i % len(TEAM_ROLE_COLORS)],
+                        mentionable=True,
+                        reason="陣取りゲーム チームロール自動作成",
+                    )
+                except discord.Forbidden:
+                    logger.warning(f"territory: チームロール作成失敗（権限不足） guild={guild.id} team={i}")
+                    role = None
+
+            channel = guild.get_channel(existing["channel_id"]) if existing and existing.get("channel_id") else None
+            if channel is None:
+                overwrites = {guild.default_role: discord.PermissionOverwrite(view_channel=False)}
+                if role is not None:
+                    overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
+                try:
+                    channel = await guild.create_text_channel(
+                        name=f"陣取り-{TEAM_LABELS[i]}",
+                        category=category,
+                        overwrites=overwrites,
+                        reason="陣取りゲーム チームチャンネル自動作成",
+                    )
+                except discord.Forbidden:
+                    logger.warning(f"territory: チームチャンネル作成失敗（権限不足） guild={guild.id} team={i}")
+                    channel = None
+            elif role is not None:
+                try:
+                    await channel.set_permissions(guild.default_role, view_channel=False)
+                    await channel.set_permissions(role, view_channel=True, send_messages=True)
+                except discord.Forbidden:
+                    logger.warning(f"territory: チームチャンネル権限更新失敗（権限不足） guild={guild.id} team={i}")
+
+            if role is not None or channel is not None:
+                await db_manager.save_territory_team_role(
+                    guild.id, i,
+                    role_id=role.id if role else None,
+                    channel_id=channel.id if channel else None,
+                )
+
+            team_roles.append(role)
+            team_channels.append(channel)
+
+        all_team_role_ids = {r.id for r in team_roles if r is not None}
+
+        for i, members_in_team in enumerate(teams):
+            role = team_roles[i]
+            if role is None:
+                continue
+            for md in members_in_team:
+                member = guild.get_member(md["user_id"])
+                if member is None:
+                    continue
+                stale = [r for r in member.roles if r.id in all_team_role_ids and r.id != role.id]
+                try:
+                    if stale:
+                        await member.remove_roles(*stale, reason="陣取りゲーム 再抽選によるチーム変更")
+                    if role not in member.roles:
+                        await member.add_roles(role, reason="陣取りゲーム チーム分け")
+                except discord.Forbidden:
+                    logger.warning(f"territory: チームロール付け替え失敗（権限不足） user={member.id}")
+
+        return team_roles, team_channels
 
     # ── プロフィール登録 ──────────────────────────────────────────
 
@@ -549,6 +704,7 @@ class TerritoryCog(commands.Cog):
             strength.value, ip_clean, autopunch.value, giu.value, comment_clean
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
+        await self._grant_participant_role(interaction.user)
 
     @app_commands.command(
         name="setup_territory_register_panel",
@@ -565,7 +721,7 @@ class TerritoryCog(commands.Cog):
             color=discord.Color.from_rgb(52, 152, 219),
         )
         try:
-            await channel.send(embed=embed, view=TerritoryRegisterPanelView())
+            await channel.send(embed=embed, view=TerritoryRegisterPanelView(self))
         except discord.Forbidden:
             await interaction.response.send_message(
                 f"❌ {channel.mention} にメッセージを送信する権限がありません。", ephemeral=True
@@ -689,8 +845,9 @@ class TerritoryCog(commands.Cog):
         description="陣取りゲームのチーム分け抽選を行います（管理者用）"
     )
     @app_commands.describe(
-        role="参加者を示すロール",
         team_count="チーム数",
+        role="参加者を示すロール（省略時は `/territory_register` で自動付与される参加者ロールを使用）",
+        category="チームチャンネルを作成するカテゴリ（省略時は前回指定したカテゴリ、なければカテゴリなし）",
     )
     @app_commands.choices(
         team_count=[
@@ -702,11 +859,35 @@ class TerritoryCog(commands.Cog):
     async def territory_draw(
         self,
         interaction: discord.Interaction,
-        role: discord.Role,
         team_count: app_commands.Choice[int],
+        role: discord.Role = None,
+        category: discord.CategoryChannel = None,
     ):
+        guild = interaction.guild
+        settings = await db_manager.get_territory_settings(interaction.guild_id) or {}
+
+        target_role = role
+        if target_role is None:
+            participant_role_id = settings.get("participant_role_id")
+            target_role = guild.get_role(participant_role_id) if participant_role_id else None
+
+        if target_role is None:
+            await interaction.response.send_message(
+                "❌ 参加者ロールが見つかりません。`role` を指定するか、参加者に先に "
+                "`/territory_register` を実行してもらってください。",
+                ephemeral=True,
+            )
+            return
+
+        if category is not None:
+            await db_manager.save_territory_settings(interaction.guild_id, team_category_id=category.id)
+            target_category = category
+        else:
+            cat_id = settings.get("team_category_id")
+            target_category = guild.get_channel(cat_id) if cat_id else None
+
         n_teams = team_count.value
-        candidates = [m for m in role.members if not m.bot]
+        candidates = [m for m in target_role.members if not m.bot]
 
         profiles = {}
         missing = []
@@ -721,7 +902,7 @@ class TerritoryCog(commands.Cog):
 
         if len(participants) < n_teams:
             await interaction.response.send_message(
-                f"❌ {role.mention} の登録済み参加者が{n_teams}人未満です（現在{len(participants)}人）。",
+                f"❌ {target_role.mention} の登録済み参加者が{n_teams}人未満です（現在{len(participants)}人）。",
                 ephemeral=True,
             )
             return
@@ -773,12 +954,17 @@ class TerritoryCog(commands.Cog):
 
         await db_manager.init_territory_grid(interaction.guild_id, n_teams)
 
-        embed = _build_teams_embed(teams)
+        await interaction.response.defer()
+
+        team_roles, team_channels = await self._sync_team_roles_and_channels(guild, teams, target_category)
+        channel_map = {i: ch for i, ch in enumerate(team_channels) if ch is not None}
+
+        embed = _build_teams_embed(teams, channel_map)
         if missing:
             names = "、".join(m.display_name for m in missing)
             embed.set_footer(text=f"未登録のため除外: {names}")
 
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
         logger.info(
             f"territory_draw: guild={interaction.guild_id} teams={n_teams} "
             f"participants={len(participants)} captains={[c.id for c in captains]}"
@@ -798,7 +984,16 @@ class TerritoryCog(commands.Cog):
                 "strength": r["strength"],
                 "is_captain": bool(r["is_captain"]),
             })
-        return _build_teams_embed(teams)
+
+        channel_map = {}
+        guild = self.bot.get_guild(guild_id)
+        if guild is not None:
+            for tr in await db_manager.get_territory_team_roles(guild_id):
+                ch = guild.get_channel(tr["channel_id"]) if tr.get("channel_id") else None
+                if ch is not None:
+                    channel_map[tr["team_index"]] = ch
+
+        return _build_teams_embed(teams, channel_map)
 
     @app_commands.command(
         name="territory_teams",

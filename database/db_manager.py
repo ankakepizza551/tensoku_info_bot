@@ -104,6 +104,40 @@ async def init_db():
         )
         await db.commit()
 
+        # 陣取りゲーム ギルド設定（参加者ロール・チームチャンネル設置先カテゴリ）
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS territory_settings (
+                guild_id INTEGER PRIMARY KEY,
+                participant_role_id INTEGER,
+                team_category_id INTEGER,
+                participant_channel_id INTEGER
+            )
+            """
+        )
+        await db.commit()
+
+        # territory_settings に participant_channel_id が存在しない場合は追加
+        async with db.execute("PRAGMA table_info(territory_settings)") as cursor:
+            ts_columns = [row[1] for row in await cursor.fetchall()]
+        if "participant_channel_id" not in ts_columns:
+            await db.execute("ALTER TABLE territory_settings ADD COLUMN participant_channel_id INTEGER")
+            await db.commit()
+
+        # 陣取りゲーム チームロール・チームチャンネル対応表
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS territory_team_roles (
+                guild_id INTEGER NOT NULL,
+                team_index INTEGER NOT NULL,
+                role_id INTEGER,
+                channel_id INTEGER,
+                PRIMARY KEY (guild_id, team_index)
+            )
+            """
+        )
+        await db.commit()
+
         # --- 既存データベースへのマイグレーション処理 ---
         # users テーブルに rating カラムが存在しない場合は追加
         async with db.execute("PRAGMA table_info(users)") as cursor:
@@ -1551,3 +1585,78 @@ async def set_territory_grid_cell(guild_id: int, cell_index: int, team_index: in
             (guild_id, cell_index, team_index),
         )
         await db.commit()
+
+# ── 陣取りゲーム: ギルド設定（参加者ロール・チームチャンネルカテゴリ） ──
+
+async def save_territory_settings(
+    guild_id: int,
+    participant_role_id: int = None,
+    team_category_id: int = None,
+    participant_channel_id: int = None,
+) -> None:
+    """指定したフィールドのみ更新する。未指定(None)の場合は既存値を維持する"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM territory_settings WHERE guild_id = ?", (guild_id,)
+        ) as cursor:
+            existing = await cursor.fetchone()
+
+        new_participant = (
+            participant_role_id if participant_role_id is not None
+            else (existing["participant_role_id"] if existing else None)
+        )
+        new_category = (
+            team_category_id if team_category_id is not None
+            else (existing["team_category_id"] if existing else None)
+        )
+        new_channel = (
+            participant_channel_id if participant_channel_id is not None
+            else (existing["participant_channel_id"] if existing else None)
+        )
+
+        await db.execute(
+            """INSERT INTO territory_settings
+               (guild_id, participant_role_id, team_category_id, participant_channel_id)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(guild_id) DO UPDATE SET
+               participant_role_id=excluded.participant_role_id,
+               team_category_id=excluded.team_category_id,
+               participant_channel_id=excluded.participant_channel_id""",
+            (guild_id, new_participant, new_category, new_channel),
+        )
+        await db.commit()
+
+async def get_territory_settings(guild_id: int) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM territory_settings WHERE guild_id = ?", (guild_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        return dict(row) if row else None
+
+# ── 陣取りゲーム: チームロール・チームチャンネル ───────────────────
+
+async def save_territory_team_role(
+    guild_id: int, team_index: int, role_id: int = None, channel_id: int = None
+) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT INTO territory_team_roles (guild_id, team_index, role_id, channel_id)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(guild_id, team_index) DO UPDATE SET
+               role_id=excluded.role_id, channel_id=excluded.channel_id""",
+            (guild_id, team_index, role_id, channel_id),
+        )
+        await db.commit()
+
+async def get_territory_team_roles(guild_id: int) -> list:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM territory_team_roles WHERE guild_id = ? ORDER BY team_index",
+            (guild_id,),
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
