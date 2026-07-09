@@ -583,6 +583,9 @@ class TerritoryCog(commands.Cog):
         """参加者ロール共通の雑談チャンネルを取得する。存在しなければ自動作成する"""
         settings = await db_manager.get_territory_settings(guild.id)
         channel = await self._resolve_channel(guild, settings.get("participant_channel_id") if settings else None)
+        if channel is None:
+            pool = category.text_channels if category is not None else guild.text_channels
+            channel = discord.utils.get(pool, name="陣取り-参加者雑談")
 
         if channel is None:
             overwrites = {
@@ -599,8 +602,8 @@ class TerritoryCog(commands.Cog):
             except discord.Forbidden:
                 logger.warning(f"territory: 参加者雑談チャンネル作成失敗（権限不足） guild={guild.id}")
                 return None
-            await db_manager.save_territory_settings(guild.id, participant_channel_id=channel.id)
 
+        await db_manager.save_territory_settings(guild.id, participant_channel_id=channel.id)
         return channel
 
     async def _ensure_participant_voice_channel(
@@ -611,6 +614,9 @@ class TerritoryCog(commands.Cog):
         channel = await self._resolve_channel(
             guild, settings.get("participant_voice_channel_id") if settings else None
         )
+        if channel is None:
+            pool = category.voice_channels if category is not None else guild.voice_channels
+            channel = discord.utils.get(pool, name="陣取り-参加者VC")
 
         if channel is None:
             overwrites = {
@@ -627,8 +633,8 @@ class TerritoryCog(commands.Cog):
             except discord.Forbidden:
                 logger.warning(f"territory: 参加者VC作成失敗（権限不足） guild={guild.id}")
                 return None
-            await db_manager.save_territory_settings(guild.id, participant_voice_channel_id=channel.id)
 
+        await db_manager.save_territory_settings(guild.id, participant_voice_channel_id=channel.id)
         return channel
 
     async def _grant_participant_role(self, member: discord.Member):
@@ -662,6 +668,8 @@ class TerritoryCog(commands.Cog):
 
             role = await self._resolve_role(guild, existing.get("role_id") if existing else None)
             if role is None:
+                role = discord.utils.get(guild.roles, name=TEAM_LABELS[i])
+            if role is None:
                 try:
                     role = await guild.create_role(
                         name=TEAM_LABELS[i],
@@ -673,14 +681,18 @@ class TerritoryCog(commands.Cog):
                     logger.warning(f"territory: チームロール作成失敗（権限不足） guild={guild.id} team={i}")
                     role = None
 
+            channel_name = f"陣取り-{TEAM_LABELS[i]}"
             channel = await self._resolve_channel(guild, existing.get("channel_id") if existing else None)
+            if channel is None:
+                pool = category.text_channels if category is not None else guild.text_channels
+                channel = discord.utils.get(pool, name=channel_name)
             if channel is None:
                 overwrites = {guild.default_role: discord.PermissionOverwrite(view_channel=False)}
                 if role is not None:
                     overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
                 try:
                     channel = await guild.create_text_channel(
-                        name=f"陣取り-{TEAM_LABELS[i]}",
+                        name=channel_name,
                         category=category,
                         overwrites=overwrites,
                         reason="陣取りゲーム チームチャンネル自動作成",
@@ -695,7 +707,11 @@ class TerritoryCog(commands.Cog):
                 except discord.Forbidden:
                     logger.warning(f"territory: チームチャンネル権限更新失敗（権限不足） guild={guild.id} team={i}")
 
+            voice_name = f"陣取り-{TEAM_LABELS[i]}-VC"
             voice_channel = await self._resolve_channel(guild, existing.get("voice_channel_id") if existing else None)
+            if voice_channel is None:
+                voice_pool = category.voice_channels if category is not None else guild.voice_channels
+                voice_channel = discord.utils.get(voice_pool, name=voice_name)
             if voice_channel is None:
                 voice_overwrites = {guild.default_role: discord.PermissionOverwrite(view_channel=False, connect=False)}
                 if role is not None:
@@ -704,7 +720,7 @@ class TerritoryCog(commands.Cog):
                     )
                 try:
                     voice_channel = await guild.create_voice_channel(
-                        name=f"陣取り-{TEAM_LABELS[i]}-VC",
+                        name=voice_name,
                         category=category,
                         overwrites=voice_overwrites,
                         reason="陣取りゲーム チームボイスチャンネル自動作成",
@@ -1505,6 +1521,9 @@ class TerritoryCog(commands.Cog):
         settings = await db_manager.get_territory_settings(guild.id) or {}
 
         reception_channel = await self._resolve_channel(guild, settings.get("reception_channel_id"))
+        if reception_channel is None:
+            pool = category.text_channels if category is not None else guild.text_channels
+            reception_channel = discord.utils.get(pool, name="陣取り-受付")
         reception_is_new = reception_channel is None
         if reception_is_new:
             try:
@@ -1516,7 +1535,8 @@ class TerritoryCog(commands.Cog):
                     "❌ チャンネルを作成する権限がありません。", ephemeral=True
                 )
                 return
-            await db_manager.save_territory_settings(guild.id, reception_channel_id=reception_channel.id)
+        # 追跡IDがずれていた場合(名前検索でヒットした場合など)も含めて常に最新IDを保存
+        await db_manager.save_territory_settings(guild.id, reception_channel_id=reception_channel.id)
 
         if reception_is_new:
             register_embed = discord.Embed(
@@ -1538,6 +1558,9 @@ class TerritoryCog(commands.Cog):
             await reception_channel.send(embed=info_embed, view=TerritoryInfoPanelView(self))
 
         hq_channel = await self._resolve_channel(guild, settings.get("hq_channel_id"))
+        if hq_channel is None:
+            pool = category.text_channels if category is not None else guild.text_channels
+            hq_channel = discord.utils.get(pool, name="陣取り-本部")
         hq_is_new = hq_channel is None
         if hq_is_new:
             try:
@@ -1549,7 +1572,7 @@ class TerritoryCog(commands.Cog):
                     "❌ チャンネルを作成する権限がありません。", ephemeral=True
                 )
                 return
-            await db_manager.save_territory_settings(guild.id, hq_channel_id=hq_channel.id)
+        await db_manager.save_territory_settings(guild.id, hq_channel_id=hq_channel.id)
 
         if hq_is_new:
             battle_embed = discord.Embed(
