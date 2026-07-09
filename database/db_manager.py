@@ -112,7 +112,9 @@ async def init_db():
                 participant_role_id INTEGER,
                 team_category_id INTEGER,
                 participant_channel_id INTEGER,
-                participant_voice_channel_id INTEGER
+                participant_voice_channel_id INTEGER,
+                reception_channel_id INTEGER,
+                hq_channel_id INTEGER
             )
             """
         )
@@ -130,6 +132,16 @@ async def init_db():
             ts_columns = [row[1] for row in await cursor.fetchall()]
         if "participant_voice_channel_id" not in ts_columns:
             await db.execute("ALTER TABLE territory_settings ADD COLUMN participant_voice_channel_id INTEGER")
+            await db.commit()
+
+        # territory_settings に reception_channel_id / hq_channel_id が存在しない場合は追加
+        async with db.execute("PRAGMA table_info(territory_settings)") as cursor:
+            ts_columns = [row[1] for row in await cursor.fetchall()]
+        if "reception_channel_id" not in ts_columns:
+            await db.execute("ALTER TABLE territory_settings ADD COLUMN reception_channel_id INTEGER")
+            await db.commit()
+        if "hq_channel_id" not in ts_columns:
+            await db.execute("ALTER TABLE territory_settings ADD COLUMN hq_channel_id INTEGER")
             await db.commit()
 
         # 陣取りゲーム チームロール・チームチャンネル対応表
@@ -1610,6 +1622,8 @@ async def save_territory_settings(
     team_category_id: int = None,
     participant_channel_id: int = None,
     participant_voice_channel_id: int = None,
+    reception_channel_id: int = None,
+    hq_channel_id: int = None,
 ) -> None:
     """指定したフィールドのみ更新する。未指定(None)の場合は既存値を維持する"""
     async with aiosqlite.connect(DB_PATH) as db:
@@ -1635,17 +1649,29 @@ async def save_territory_settings(
             participant_voice_channel_id if participant_voice_channel_id is not None
             else (existing["participant_voice_channel_id"] if existing else None)
         )
+        new_reception_channel = (
+            reception_channel_id if reception_channel_id is not None
+            else (existing["reception_channel_id"] if existing else None)
+        )
+        new_hq_channel = (
+            hq_channel_id if hq_channel_id is not None
+            else (existing["hq_channel_id"] if existing else None)
+        )
 
         await db.execute(
             """INSERT INTO territory_settings
-               (guild_id, participant_role_id, team_category_id, participant_channel_id, participant_voice_channel_id)
-               VALUES (?, ?, ?, ?, ?)
+               (guild_id, participant_role_id, team_category_id, participant_channel_id,
+                participant_voice_channel_id, reception_channel_id, hq_channel_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(guild_id) DO UPDATE SET
                participant_role_id=excluded.participant_role_id,
                team_category_id=excluded.team_category_id,
                participant_channel_id=excluded.participant_channel_id,
-               participant_voice_channel_id=excluded.participant_voice_channel_id""",
-            (guild_id, new_participant, new_category, new_channel, new_voice_channel),
+               participant_voice_channel_id=excluded.participant_voice_channel_id,
+               reception_channel_id=excluded.reception_channel_id,
+               hq_channel_id=excluded.hq_channel_id""",
+            (guild_id, new_participant, new_category, new_channel, new_voice_channel,
+             new_reception_channel, new_hq_channel),
         )
         await db.commit()
 

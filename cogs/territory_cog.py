@@ -560,9 +560,7 @@ class TerritoryCog(commands.Cog):
     async def _ensure_participant_role(self, guild: discord.Guild) -> discord.Role | None:
         """陣取りゲーム参加者ロールを取得する。存在しなければ自動作成する"""
         settings = await db_manager.get_territory_settings(guild.id)
-        role = None
-        if settings and settings.get("participant_role_id"):
-            role = guild.get_role(settings["participant_role_id"])
+        role = await self._resolve_role(guild, settings.get("participant_role_id") if settings else None)
 
         if role is None:
             try:
@@ -584,9 +582,7 @@ class TerritoryCog(commands.Cog):
     ) -> discord.TextChannel | None:
         """参加者ロール共通の雑談チャンネルを取得する。存在しなければ自動作成する"""
         settings = await db_manager.get_territory_settings(guild.id)
-        channel = None
-        if settings and settings.get("participant_channel_id"):
-            channel = guild.get_channel(settings["participant_channel_id"])
+        channel = await self._resolve_channel(guild, settings.get("participant_channel_id") if settings else None)
 
         if channel is None:
             overwrites = {
@@ -612,9 +608,9 @@ class TerritoryCog(commands.Cog):
     ) -> discord.VoiceChannel | None:
         """参加者ロール共通のボイスチャンネルを取得する。存在しなければ自動作成する"""
         settings = await db_manager.get_territory_settings(guild.id)
-        channel = None
-        if settings and settings.get("participant_voice_channel_id"):
-            channel = guild.get_channel(settings["participant_voice_channel_id"])
+        channel = await self._resolve_channel(
+            guild, settings.get("participant_voice_channel_id") if settings else None
+        )
 
         if channel is None:
             overwrites = {
@@ -664,7 +660,7 @@ class TerritoryCog(commands.Cog):
         for i in range(n_teams):
             existing = existing_roles.get(i)
 
-            role = guild.get_role(existing["role_id"]) if existing and existing.get("role_id") else None
+            role = await self._resolve_role(guild, existing.get("role_id") if existing else None)
             if role is None:
                 try:
                     role = await guild.create_role(
@@ -677,7 +673,7 @@ class TerritoryCog(commands.Cog):
                     logger.warning(f"territory: チームロール作成失敗（権限不足） guild={guild.id} team={i}")
                     role = None
 
-            channel = guild.get_channel(existing["channel_id"]) if existing and existing.get("channel_id") else None
+            channel = await self._resolve_channel(guild, existing.get("channel_id") if existing else None)
             if channel is None:
                 overwrites = {guild.default_role: discord.PermissionOverwrite(view_channel=False)}
                 if role is not None:
@@ -699,10 +695,7 @@ class TerritoryCog(commands.Cog):
                 except discord.Forbidden:
                     logger.warning(f"territory: チームチャンネル権限更新失敗（権限不足） guild={guild.id} team={i}")
 
-            voice_channel = (
-                guild.get_channel(existing["voice_channel_id"])
-                if existing and existing.get("voice_channel_id") else None
-            )
+            voice_channel = await self._resolve_channel(guild, existing.get("voice_channel_id") if existing else None)
             if voice_channel is None:
                 voice_overwrites = {guild.default_role: discord.PermissionOverwrite(view_channel=False, connect=False)}
                 if role is not None:
@@ -1505,56 +1498,83 @@ class TerritoryCog(commands.Cog):
         participant_channel = await self._ensure_participant_channel(guild, role, category=category)
         participant_voice_channel = await self._ensure_participant_voice_channel(guild, role, category=category)
 
-        try:
-            reception_channel = await guild.create_text_channel(
-                name="陣取り-受付", category=category, reason="陣取りゲーム 初期セットアップ"
+        settings = await db_manager.get_territory_settings(guild.id) or {}
+
+        reception_channel = await self._resolve_channel(guild, settings.get("reception_channel_id"))
+        reception_is_new = reception_channel is None
+        if reception_is_new:
+            try:
+                reception_channel = await guild.create_text_channel(
+                    name="陣取り-受付", category=category, reason="陣取りゲーム 初期セットアップ"
+                )
+            except discord.Forbidden:
+                await interaction.followup.send(
+                    "❌ チャンネルを作成する権限がありません。", ephemeral=True
+                )
+                return
+            await db_manager.save_territory_settings(guild.id, reception_channel_id=reception_channel.id)
+
+        if reception_is_new:
+            register_embed = discord.Embed(
+                title="🗺️ 陣取りゲーム プロフィール登録",
+                description="下のボタンから強さ・接続情報などを登録/変更できます。",
+                color=discord.Color.from_rgb(52, 152, 219),
             )
-        except discord.Forbidden:
-            await interaction.followup.send(
-                "❌ チャンネルを作成する権限がありません。", ephemeral=True
+            await reception_channel.send(embed=register_embed, view=TerritoryRegisterPanelView(self))
+
+            info_embed = discord.Embed(
+                title="🗺️ 陣取りゲーム 情報パネル",
+                description=(
+                    "・👤 自分のプロフィール確認\n"
+                    "・📋 登録者一覧\n"
+                    "・🗂️ チーム分け結果"
+                ),
+                color=discord.Color.from_rgb(52, 152, 219),
             )
-            return
+            await reception_channel.send(embed=info_embed, view=TerritoryInfoPanelView(self))
 
-        register_embed = discord.Embed(
-            title="🗺️ 陣取りゲーム プロフィール登録",
-            description="下のボタンから強さ・接続情報などを登録/変更できます。",
-            color=discord.Color.from_rgb(52, 152, 219),
-        )
-        await reception_channel.send(embed=register_embed, view=TerritoryRegisterPanelView(self))
+        hq_channel = await self._resolve_channel(guild, settings.get("hq_channel_id"))
+        hq_is_new = hq_channel is None
+        if hq_is_new:
+            try:
+                hq_channel = await guild.create_text_channel(
+                    name="陣取り-本部", category=category, reason="陣取りゲーム 初期セットアップ"
+                )
+            except discord.Forbidden:
+                await interaction.followup.send(
+                    "❌ チャンネルを作成する権限がありません。", ephemeral=True
+                )
+                return
+            await db_manager.save_territory_settings(guild.id, hq_channel_id=hq_channel.id)
 
-        info_embed = discord.Embed(
-            title="🗺️ 陣取りゲーム 情報パネル",
-            description=(
-                "・👤 自分のプロフィール確認\n"
-                "・📋 登録者一覧\n"
-                "・🗂️ チーム分け結果"
-            ),
-            color=discord.Color.from_rgb(52, 152, 219),
-        )
-        await reception_channel.send(embed=info_embed, view=TerritoryInfoPanelView(self))
-
-        hq_channel = await guild.create_text_channel(
-            name="陣取り-本部", category=category, reason="陣取りゲーム 初期セットアップ"
-        )
-        battle_embed = discord.Embed(
-            title="⚔️ 陣取りゲーム 対戦パネル",
-            description=(
-                "・⚔️ 対戦結果を報告\n"
-                "・📊 現在の戦況\n"
-                "・🗑️ 対戦結果を削除\n"
-                "・🗺️ 陣地マップ"
-            ),
-            color=discord.Color.from_rgb(230, 126, 34),
-        )
-        await hq_channel.send(embed=battle_embed, view=TerritoryBattlePanelView(self))
+        if hq_is_new:
+            battle_embed = discord.Embed(
+                title="⚔️ 陣取りゲーム 対戦パネル",
+                description=(
+                    "・⚔️ 対戦結果を報告\n"
+                    "・📊 現在の戦況\n"
+                    "・🗑️ 対戦結果を削除\n"
+                    "・🗺️ 陣地マップ"
+                ),
+                color=discord.Color.from_rgb(230, 126, 34),
+            )
+            await hq_channel.send(embed=battle_embed, view=TerritoryBattlePanelView(self))
 
         summary = discord.Embed(
             title="✅ 陣取りゲーム 初期セットアップ完了",
             color=discord.Color.from_rgb(46, 204, 113),
         )
         summary.add_field(name="カテゴリ", value=category.name, inline=False)
-        summary.add_field(name="受付チャンネル", value=reception_channel.mention, inline=True)
-        summary.add_field(name="本部チャンネル", value=hq_channel.mention, inline=True)
+        summary.add_field(
+            name="受付チャンネル",
+            value=f"{reception_channel.mention}" + ("" if reception_is_new else "（既存を再利用）"),
+            inline=True,
+        )
+        summary.add_field(
+            name="本部チャンネル",
+            value=f"{hq_channel.mention}" + ("" if hq_is_new else "（既存を再利用）"),
+            inline=True,
+        )
         if participant_channel:
             summary.add_field(name="参加者雑談チャンネル", value=participant_channel.mention, inline=True)
         if participant_voice_channel:
