@@ -1682,3 +1682,30 @@ async def get_territory_team_roles(guild_id: int) -> list:
         ) as cursor:
             rows = await cursor.fetchall()
         return [dict(r) for r in rows]
+
+async def clear_territory_team_roles(guild_id: int) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM territory_team_roles WHERE guild_id = ?", (guild_id,))
+        await db.commit()
+
+# ── 陣取りゲーム: お片付け（大会終了時のデータリセット） ───────────
+
+async def clear_territory_matches(guild_id: int) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM territory_matches WHERE guild_id = ?", (guild_id,))
+        await db.commit()
+
+async def clear_territory_grid(guild_id: int) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM territory_grid WHERE guild_id = ?", (guild_id,))
+        await db.commit()
+
+async def clear_all_territory_profiles() -> None:
+    """陣取りゲームの登録プロフィールを全件削除する。
+
+    territory_profiles はギルドに紐付いていない（user_idのみで管理）ため、
+    このBotが複数サーバーで稼働している場合は全サーバー分がリセットされる点に注意。
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM territory_profiles")
+        await db.commit()

@@ -186,6 +186,50 @@ class TerritoryExpansionView(discord.ui.View):
                 pass
 
 
+class TerritoryCleanupConfirmView(discord.ui.View):
+    """お片付け(チームロール・チャンネル削除+データリセット)の実行前確認View"""
+
+    def __init__(self, cog: "TerritoryCog", invoker_id: int, team_role_rows: list):
+        super().__init__(timeout=120)
+        self.cog = cog
+        self.invoker_id = invoker_id
+        self.team_role_rows = team_role_rows
+        self.message: discord.Message | None = None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.invoker_id and not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message(
+                "❌ コマンドを実行した本人または管理者のみ操作できます。", ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="🗑️ 削除を実行", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(content="🧹 削除処理を実行中...", embed=None, view=self)
+        result_embed = await self.cog._execute_territory_cleanup(interaction.guild, self.team_role_rows)
+        await interaction.edit_original_response(content=None, embed=result_embed, view=None)
+        self.stop()
+
+    @discord.ui.button(label="キャンセル", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(content="キャンセルしました。", embed=None, view=self)
+        self.stop()
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(content="⏰ 確認時間が終了しました。お片付けは実行されていません。", view=self)
+            except discord.HTTPException:
+                pass
+
+
 class TerritoryRegisterModal(discord.ui.Modal):
     def __init__(self, cog: "TerritoryCog", existing: dict | None = None):
         super().__init__(title="🗺️ 陣取りゲーム プロフィール登録")
@@ -1522,6 +1566,111 @@ class TerritoryCog(commands.Cog):
 
         await interaction.followup.send(embed=summary, ephemeral=True)
         logger.info(f"territory_setup: guild={guild.id} category={category.id}")
+
+    # ── お片付け（大会終了時のクリーンアップ） ────────────────────
+
+    async def _execute_territory_cleanup(self, guild: discord.Guild, team_role_rows: list) -> discord.Embed:
+        deleted_roles = 0
+        deleted_channels = 0
+        deleted_voice = 0
+        errors = []
+
+        for tr in team_role_rows:
+            role = guild.get_role(tr["role_id"]) if tr.get("role_id") else None
+            if role is not None:
+                try:
+                    await role.delete(reason="陣取りゲーム 大会終了によるお片付け")
+                    deleted_roles += 1
+                except discord.Forbidden:
+                    errors.append(f"ロール {role.name} の削除に失敗（権限不足）")
+
+            channel = guild.get_channel(tr["channel_id"]) if tr.get("channel_id") else None
+            if channel is not None:
+                try:
+                    await channel.delete(reason="陣取りゲーム 大会終了によるお片付け")
+                    deleted_channels += 1
+                except discord.Forbidden:
+                    errors.append(f"チャンネル {channel.name} の削除に失敗（権限不足）")
+
+            voice = guild.get_channel(tr["voice_channel_id"]) if tr.get("voice_channel_id") else None
+            if voice is not None:
+                try:
+                    await voice.delete(reason="陣取りゲーム 大会終了によるお片付け")
+                    deleted_voice += 1
+                except discord.Forbidden:
+                    errors.append(f"VC {voice.name} の削除に失敗（権限不足）")
+
+        await db_manager.clear_territory_team_roles(guild.id)
+        await db_manager.clear_territory_teams(guild.id)
+        await db_manager.clear_territory_matches(guild.id)
+        await db_manager.clear_territory_grid(guild.id)
+        await db_manager.clear_all_territory_profiles()
+
+        embed = discord.Embed(
+            title="🧹 陣取りゲーム お片付け完了",
+            color=discord.Color.from_rgb(46, 204, 113),
+        )
+        embed.add_field(name="削除したロール", value=str(deleted_roles), inline=True)
+        embed.add_field(name="削除したチャンネル", value=str(deleted_channels), inline=True)
+        embed.add_field(name="削除したVC", value=str(deleted_voice), inline=True)
+        embed.add_field(
+            name="リセットしたデータ",
+            value="登録プロフィール・チーム分け・対戦履歴・陣地マップ",
+            inline=False,
+        )
+        if errors:
+            embed.add_field(name="⚠️ 一部失敗", value="\n".join(errors)[:1024], inline=False)
+        embed.set_footer(text="参加者ロール・全体雑談ch/VCは維持されています（次回もそのまま使えます）")
+
+        logger.info(
+            f"territory_cleanup: guild={guild.id} roles={deleted_roles} channels={deleted_channels} "
+            f"voice={deleted_voice} errors={len(errors)}"
+        )
+        return embed
+
+    @app_commands.command(
+        name="territory_cleanup",
+        description="陣取りゲーム終了後のお片付け（チームロール・チャンネル削除+データリセット）を行います（管理者用）"
+    )
+    @app_commands.default_permissions(manage_guild=True)
+    async def territory_cleanup(self, interaction: discord.Interaction):
+        team_role_rows = await db_manager.get_territory_team_roles(interaction.guild_id)
+
+        if not team_role_rows:
+            await interaction.response.send_message(
+                "削除対象のチームロール・チャンネルが見つかりませんでした。", ephemeral=True
+            )
+            return
+
+        guild = interaction.guild
+        lines = []
+        for tr in team_role_rows:
+            role = guild.get_role(tr["role_id"]) if tr.get("role_id") else None
+            channel = guild.get_channel(tr["channel_id"]) if tr.get("channel_id") else None
+            voice = guild.get_channel(tr["voice_channel_id"]) if tr.get("voice_channel_id") else None
+            parts = [p for p in (
+                role.mention if role else None,
+                channel.mention if channel else None,
+                f"🔊{voice.mention}" if voice else None,
+            ) if p]
+            label = TEAM_LABELS[tr["team_index"]] if tr["team_index"] < len(TEAM_LABELS) else f"チーム{tr['team_index']}"
+            lines.append(f"{label}: " + (" / ".join(parts) if parts else "(すでに存在しません)"))
+
+        embed = discord.Embed(
+            title="⚠️ 陣取りゲーム お片付け確認",
+            description=(
+                "以下のチームロール・チャンネル・VCを削除し、登録プロフィール・チーム分け・"
+                "対戦履歴・陣地マップをリセットします。\n"
+                "**この操作は取り消せません。**\n\n"
+                "参加者ロール・全体雑談ch/VCは削除されません（次回もそのまま使えます）。"
+            ),
+            color=discord.Color.from_rgb(230, 126, 34),
+        )
+        embed.add_field(name="削除対象", value="\n".join(lines), inline=False)
+
+        view = TerritoryCleanupConfirmView(self, interaction.user.id, team_role_rows)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        view.message = await interaction.original_response()
 
 
 async def setup(bot):
