@@ -531,7 +531,7 @@ class TerritoryCog(commands.Cog):
         return role
 
     async def _ensure_participant_channel(
-        self, guild: discord.Guild, role: discord.Role
+        self, guild: discord.Guild, role: discord.Role, category: discord.CategoryChannel | None = None
     ) -> discord.TextChannel | None:
         """参加者ロール共通の雑談チャンネルを取得する。存在しなければ自動作成する"""
         settings = await db_manager.get_territory_settings(guild.id)
@@ -547,6 +547,7 @@ class TerritoryCog(commands.Cog):
             try:
                 channel = await guild.create_text_channel(
                     name="陣取り-参加者雑談",
+                    category=category,
                     overwrites=overwrites,
                     reason="陣取りゲーム 参加者共通チャンネルの自動作成",
                 )
@@ -1351,6 +1352,102 @@ class TerritoryCog(commands.Cog):
             f"✅ 対戦パネルを {channel.mention} に設置しました。", ephemeral=True
         )
         logger.info(f"setup_territory_battle_panel: guild={interaction.guild_id} channel={channel.id}")
+
+    # ── 一括セットアップ ──────────────────────────────────────────
+
+    @app_commands.command(
+        name="territory_setup",
+        description="陣取りゲームの初期セットアップ（ロール・チャンネル・全パネル）を一括で行います（管理者用）"
+    )
+    @app_commands.describe(category="使用するカテゴリ（省略時は新規作成）")
+    @app_commands.default_permissions(manage_guild=True)
+    async def territory_setup(
+        self, interaction: discord.Interaction, category: discord.CategoryChannel = None
+    ):
+        guild = interaction.guild
+        await interaction.response.defer(ephemeral=True)
+
+        if category is None:
+            try:
+                category = await guild.create_category(
+                    "陣取りゲーム", reason="陣取りゲーム 初期セットアップ"
+                )
+            except discord.Forbidden:
+                await interaction.followup.send(
+                    "❌ カテゴリを作成する権限がありません。", ephemeral=True
+                )
+                return
+
+        await db_manager.save_territory_settings(guild.id, team_category_id=category.id)
+
+        role = await self._ensure_participant_role(guild)
+        if role is None:
+            await interaction.followup.send(
+                "❌ 参加者ロールを作成する権限がありません。", ephemeral=True
+            )
+            return
+
+        participant_channel = await self._ensure_participant_channel(guild, role, category=category)
+
+        try:
+            reception_channel = await guild.create_text_channel(
+                name="陣取り-受付", category=category, reason="陣取りゲーム 初期セットアップ"
+            )
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "❌ チャンネルを作成する権限がありません。", ephemeral=True
+            )
+            return
+
+        register_embed = discord.Embed(
+            title="🗺️ 陣取りゲーム プロフィール登録",
+            description="下のボタンから強さ・接続情報などを登録/変更できます。",
+            color=discord.Color.from_rgb(52, 152, 219),
+        )
+        await reception_channel.send(embed=register_embed, view=TerritoryRegisterPanelView(self))
+
+        info_embed = discord.Embed(
+            title="🗺️ 陣取りゲーム 情報パネル",
+            description=(
+                "・👤 自分のプロフィール確認\n"
+                "・📋 登録者一覧\n"
+                "・🗂️ チーム分け結果"
+            ),
+            color=discord.Color.from_rgb(52, 152, 219),
+        )
+        await reception_channel.send(embed=info_embed, view=TerritoryInfoPanelView(self))
+
+        hq_channel = await guild.create_text_channel(
+            name="陣取り-本部", category=category, reason="陣取りゲーム 初期セットアップ"
+        )
+        battle_embed = discord.Embed(
+            title="⚔️ 陣取りゲーム 対戦パネル",
+            description=(
+                "・⚔️ 対戦結果を報告\n"
+                "・📊 現在の戦況\n"
+                "・🗑️ 対戦結果を削除\n"
+                "・🗺️ 陣地マップ"
+            ),
+            color=discord.Color.from_rgb(230, 126, 34),
+        )
+        await hq_channel.send(embed=battle_embed, view=TerritoryBattlePanelView(self))
+
+        summary = discord.Embed(
+            title="✅ 陣取りゲーム 初期セットアップ完了",
+            color=discord.Color.from_rgb(46, 204, 113),
+        )
+        summary.add_field(name="カテゴリ", value=category.name, inline=False)
+        summary.add_field(name="受付チャンネル", value=reception_channel.mention, inline=True)
+        summary.add_field(name="本部チャンネル", value=hq_channel.mention, inline=True)
+        if participant_channel:
+            summary.add_field(name="参加者雑談チャンネル", value=participant_channel.mention, inline=True)
+        summary.add_field(name="参加者ロール", value=role.mention, inline=True)
+        summary.set_footer(
+            text="チーム分け(/territory_draw)を実行すると、チームごとのロール・チャンネルも自動作成されます。"
+        )
+
+        await interaction.followup.send(embed=summary, ephemeral=True)
+        logger.info(f"territory_setup: guild={guild.id} category={category.id}")
 
 
 async def setup(bot):
