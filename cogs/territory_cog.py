@@ -68,7 +68,7 @@ def _build_register_confirmation_embed(
     return embed
 
 
-def _build_teams_embed(teams: list, channel_map: dict = None) -> discord.Embed:
+def _build_teams_embed(teams: list, channel_map: dict = None, voice_map: dict = None) -> discord.Embed:
     """teams: [[{"user_id","username","strength","is_captain"}, ...], ...]"""
     embed = discord.Embed(
         title="🗺️ 陣取りゲーム チーム分け結果",
@@ -85,8 +85,13 @@ def _build_teams_embed(teams: list, channel_map: dict = None) -> discord.Embed:
                 label = STRENGTH_LABELS.get(m["strength"], str(m["strength"]))
                 lines.append(f"　{m['username']} (`{label}`)")
         field_name = f"{TEAM_LABELS[i]}（{len(members)}人 / 合計強さ{total}）"
+        extra = []
         if channel_map and channel_map.get(i):
-            field_name += f" → {channel_map[i].mention}"
+            extra.append(channel_map[i].mention)
+        if voice_map and voice_map.get(i):
+            extra.append(f"🔊{voice_map[i].mention}")
+        if extra:
+            field_name += " → " + " ".join(extra)
         embed.add_field(
             name=field_name,
             value="\n".join(lines) or "なし",
@@ -558,12 +563,41 @@ class TerritoryCog(commands.Cog):
 
         return channel
 
+    async def _ensure_participant_voice_channel(
+        self, guild: discord.Guild, role: discord.Role, category: discord.CategoryChannel | None = None
+    ) -> discord.VoiceChannel | None:
+        """参加者ロール共通のボイスチャンネルを取得する。存在しなければ自動作成する"""
+        settings = await db_manager.get_territory_settings(guild.id)
+        channel = None
+        if settings and settings.get("participant_voice_channel_id"):
+            channel = guild.get_channel(settings["participant_voice_channel_id"])
+
+        if channel is None:
+            overwrites = {
+                guild.default_role: discord.PermissionOverwrite(view_channel=False, connect=False),
+                role: discord.PermissionOverwrite(view_channel=True, connect=True, speak=True),
+            }
+            try:
+                channel = await guild.create_voice_channel(
+                    name="陣取り-参加者VC",
+                    category=category,
+                    overwrites=overwrites,
+                    reason="陣取りゲーム 参加者共通ボイスチャンネルの自動作成",
+                )
+            except discord.Forbidden:
+                logger.warning(f"territory: 参加者VC作成失敗（権限不足） guild={guild.id}")
+                return None
+            await db_manager.save_territory_settings(guild.id, participant_voice_channel_id=channel.id)
+
+        return channel
+
     async def _grant_participant_role(self, member: discord.Member):
         role = await self._ensure_participant_role(member.guild)
         if role is None:
             return
 
         await self._ensure_participant_channel(member.guild, role)
+        await self._ensure_participant_voice_channel(member.guild, role)
 
         if role in member.roles:
             return
@@ -581,6 +615,7 @@ class TerritoryCog(commands.Cog):
 
         team_roles: list[discord.Role | None] = []
         team_channels: list[discord.TextChannel | None] = []
+        team_voice_channels: list[discord.VoiceChannel | None] = []
 
         for i in range(n_teams):
             existing = existing_roles.get(i)
@@ -620,15 +655,44 @@ class TerritoryCog(commands.Cog):
                 except discord.Forbidden:
                     logger.warning(f"territory: チームチャンネル権限更新失敗（権限不足） guild={guild.id} team={i}")
 
-            if role is not None or channel is not None:
+            voice_channel = (
+                guild.get_channel(existing["voice_channel_id"])
+                if existing and existing.get("voice_channel_id") else None
+            )
+            if voice_channel is None:
+                voice_overwrites = {guild.default_role: discord.PermissionOverwrite(view_channel=False, connect=False)}
+                if role is not None:
+                    voice_overwrites[role] = discord.PermissionOverwrite(
+                        view_channel=True, connect=True, speak=True
+                    )
+                try:
+                    voice_channel = await guild.create_voice_channel(
+                        name=f"陣取り-{TEAM_LABELS[i]}-VC",
+                        category=category,
+                        overwrites=voice_overwrites,
+                        reason="陣取りゲーム チームボイスチャンネル自動作成",
+                    )
+                except discord.Forbidden:
+                    logger.warning(f"territory: チームVC作成失敗（権限不足） guild={guild.id} team={i}")
+                    voice_channel = None
+            elif role is not None:
+                try:
+                    await voice_channel.set_permissions(guild.default_role, view_channel=False, connect=False)
+                    await voice_channel.set_permissions(role, view_channel=True, connect=True, speak=True)
+                except discord.Forbidden:
+                    logger.warning(f"territory: チームVC権限更新失敗（権限不足） guild={guild.id} team={i}")
+
+            if role is not None or channel is not None or voice_channel is not None:
                 await db_manager.save_territory_team_role(
                     guild.id, i,
                     role_id=role.id if role else None,
                     channel_id=channel.id if channel else None,
+                    voice_channel_id=voice_channel.id if voice_channel else None,
                 )
 
             team_roles.append(role)
             team_channels.append(channel)
+            team_voice_channels.append(voice_channel)
 
         all_team_role_ids = {r.id for r in team_roles if r is not None}
 
@@ -649,7 +713,7 @@ class TerritoryCog(commands.Cog):
                 except discord.Forbidden:
                     logger.warning(f"territory: チームロール付け替え失敗（権限不足） user={member.id}")
 
-        return team_roles, team_channels
+        return team_roles, team_channels, team_voice_channels
 
     # ── プロフィール登録 ──────────────────────────────────────────
 
@@ -957,10 +1021,13 @@ class TerritoryCog(commands.Cog):
 
         await interaction.response.defer()
 
-        team_roles, team_channels = await self._sync_team_roles_and_channels(guild, teams, target_category)
+        team_roles, team_channels, team_voice_channels = await self._sync_team_roles_and_channels(
+            guild, teams, target_category
+        )
         channel_map = {i: ch for i, ch in enumerate(team_channels) if ch is not None}
+        voice_map = {i: ch for i, ch in enumerate(team_voice_channels) if ch is not None}
 
-        embed = _build_teams_embed(teams, channel_map)
+        embed = _build_teams_embed(teams, channel_map, voice_map)
         if missing:
             names = "、".join(m.display_name for m in missing)
             embed.set_footer(text=f"未登録のため除外: {names}")
@@ -987,14 +1054,18 @@ class TerritoryCog(commands.Cog):
             })
 
         channel_map = {}
+        voice_map = {}
         guild = self.bot.get_guild(guild_id)
         if guild is not None:
             for tr in await db_manager.get_territory_team_roles(guild_id):
                 ch = guild.get_channel(tr["channel_id"]) if tr.get("channel_id") else None
                 if ch is not None:
                     channel_map[tr["team_index"]] = ch
+                vc = guild.get_channel(tr["voice_channel_id"]) if tr.get("voice_channel_id") else None
+                if vc is not None:
+                    voice_map[tr["team_index"]] = vc
 
-        return _build_teams_embed(teams, channel_map)
+        return _build_teams_embed(teams, channel_map, voice_map)
 
     @app_commands.command(
         name="territory_teams",
@@ -1388,6 +1459,7 @@ class TerritoryCog(commands.Cog):
             return
 
         participant_channel = await self._ensure_participant_channel(guild, role, category=category)
+        participant_voice_channel = await self._ensure_participant_voice_channel(guild, role, category=category)
 
         try:
             reception_channel = await guild.create_text_channel(
@@ -1441,9 +1513,11 @@ class TerritoryCog(commands.Cog):
         summary.add_field(name="本部チャンネル", value=hq_channel.mention, inline=True)
         if participant_channel:
             summary.add_field(name="参加者雑談チャンネル", value=participant_channel.mention, inline=True)
+        if participant_voice_channel:
+            summary.add_field(name="参加者VC", value=participant_voice_channel.mention, inline=True)
         summary.add_field(name="参加者ロール", value=role.mention, inline=True)
         summary.set_footer(
-            text="チーム分け(/territory_draw)を実行すると、チームごとのロール・チャンネルも自動作成されます。"
+            text="チーム分け(/territory_draw)を実行すると、チームごとのロール・チャンネル・VCも自動作成されます。"
         )
 
         await interaction.followup.send(embed=summary, ephemeral=True)

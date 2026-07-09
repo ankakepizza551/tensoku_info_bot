@@ -111,7 +111,8 @@ async def init_db():
                 guild_id INTEGER PRIMARY KEY,
                 participant_role_id INTEGER,
                 team_category_id INTEGER,
-                participant_channel_id INTEGER
+                participant_channel_id INTEGER,
+                participant_voice_channel_id INTEGER
             )
             """
         )
@@ -124,6 +125,13 @@ async def init_db():
             await db.execute("ALTER TABLE territory_settings ADD COLUMN participant_channel_id INTEGER")
             await db.commit()
 
+        # territory_settings に participant_voice_channel_id が存在しない場合は追加
+        async with db.execute("PRAGMA table_info(territory_settings)") as cursor:
+            ts_columns = [row[1] for row in await cursor.fetchall()]
+        if "participant_voice_channel_id" not in ts_columns:
+            await db.execute("ALTER TABLE territory_settings ADD COLUMN participant_voice_channel_id INTEGER")
+            await db.commit()
+
         # 陣取りゲーム チームロール・チームチャンネル対応表
         await db.execute(
             """
@@ -132,11 +140,19 @@ async def init_db():
                 team_index INTEGER NOT NULL,
                 role_id INTEGER,
                 channel_id INTEGER,
+                voice_channel_id INTEGER,
                 PRIMARY KEY (guild_id, team_index)
             )
             """
         )
         await db.commit()
+
+        # territory_team_roles に voice_channel_id が存在しない場合は追加
+        async with db.execute("PRAGMA table_info(territory_team_roles)") as cursor:
+            ttr_columns = [row[1] for row in await cursor.fetchall()]
+        if "voice_channel_id" not in ttr_columns:
+            await db.execute("ALTER TABLE territory_team_roles ADD COLUMN voice_channel_id INTEGER")
+            await db.commit()
 
         # --- 既存データベースへのマイグレーション処理 ---
         # users テーブルに rating カラムが存在しない場合は追加
@@ -1593,6 +1609,7 @@ async def save_territory_settings(
     participant_role_id: int = None,
     team_category_id: int = None,
     participant_channel_id: int = None,
+    participant_voice_channel_id: int = None,
 ) -> None:
     """指定したフィールドのみ更新する。未指定(None)の場合は既存値を維持する"""
     async with aiosqlite.connect(DB_PATH) as db:
@@ -1614,16 +1631,21 @@ async def save_territory_settings(
             participant_channel_id if participant_channel_id is not None
             else (existing["participant_channel_id"] if existing else None)
         )
+        new_voice_channel = (
+            participant_voice_channel_id if participant_voice_channel_id is not None
+            else (existing["participant_voice_channel_id"] if existing else None)
+        )
 
         await db.execute(
             """INSERT INTO territory_settings
-               (guild_id, participant_role_id, team_category_id, participant_channel_id)
-               VALUES (?, ?, ?, ?)
+               (guild_id, participant_role_id, team_category_id, participant_channel_id, participant_voice_channel_id)
+               VALUES (?, ?, ?, ?, ?)
                ON CONFLICT(guild_id) DO UPDATE SET
                participant_role_id=excluded.participant_role_id,
                team_category_id=excluded.team_category_id,
-               participant_channel_id=excluded.participant_channel_id""",
-            (guild_id, new_participant, new_category, new_channel),
+               participant_channel_id=excluded.participant_channel_id,
+               participant_voice_channel_id=excluded.participant_voice_channel_id""",
+            (guild_id, new_participant, new_category, new_channel, new_voice_channel),
         )
         await db.commit()
 
@@ -1639,15 +1661,15 @@ async def get_territory_settings(guild_id: int) -> dict | None:
 # ── 陣取りゲーム: チームロール・チームチャンネル ───────────────────
 
 async def save_territory_team_role(
-    guild_id: int, team_index: int, role_id: int = None, channel_id: int = None
+    guild_id: int, team_index: int, role_id: int = None, channel_id: int = None, voice_channel_id: int = None
 ) -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            """INSERT INTO territory_team_roles (guild_id, team_index, role_id, channel_id)
-               VALUES (?, ?, ?, ?)
+            """INSERT INTO territory_team_roles (guild_id, team_index, role_id, channel_id, voice_channel_id)
+               VALUES (?, ?, ?, ?, ?)
                ON CONFLICT(guild_id, team_index) DO UPDATE SET
-               role_id=excluded.role_id, channel_id=excluded.channel_id""",
-            (guild_id, team_index, role_id, channel_id),
+               role_id=excluded.role_id, channel_id=excluded.channel_id, voice_channel_id=excluded.voice_channel_id""",
+            (guild_id, team_index, role_id, channel_id, voice_channel_id),
         )
         await db.commit()
 
