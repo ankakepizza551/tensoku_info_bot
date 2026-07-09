@@ -1475,6 +1475,10 @@ class TerritoryCog(commands.Cog):
         guild = interaction.guild
         await interaction.response.defer(ephemeral=True)
 
+        settings = await db_manager.get_territory_settings(guild.id) or {}
+
+        if category is None:
+            category = await self._resolve_channel(guild, settings.get("team_category_id"))
         if category is None:
             try:
                 category = await guild.create_category(
