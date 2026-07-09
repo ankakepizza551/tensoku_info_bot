@@ -1569,14 +1569,40 @@ class TerritoryCog(commands.Cog):
 
     # ── お片付け（大会終了時のクリーンアップ） ────────────────────
 
+    async def _resolve_role(self, guild: discord.Guild, role_id: int | None) -> discord.Role | None:
+        """キャッシュに無ければAPIへ直接問い合わせて、削除漏れを防ぐ"""
+        if not role_id:
+            return None
+        role = guild.get_role(role_id)
+        if role is not None:
+            return role
+        try:
+            roles = await guild.fetch_roles()
+            return discord.utils.get(roles, id=role_id)
+        except discord.HTTPException:
+            return None
+
+    async def _resolve_channel(self, guild: discord.Guild, channel_id: int | None):
+        """キャッシュに無ければAPIへ直接問い合わせて、削除漏れを防ぐ"""
+        if not channel_id:
+            return None
+        channel = guild.get_channel(channel_id)
+        if channel is not None:
+            return channel
+        try:
+            return await guild.fetch_channel(channel_id)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            return None
+
     async def _execute_territory_cleanup(self, guild: discord.Guild, team_role_rows: list) -> discord.Embed:
         deleted_roles = 0
         deleted_channels = 0
         deleted_voice = 0
+        unassigned_members = 0
         errors = []
 
         for tr in team_role_rows:
-            role = guild.get_role(tr["role_id"]) if tr.get("role_id") else None
+            role = await self._resolve_role(guild, tr.get("role_id"))
             if role is not None:
                 try:
                     await role.delete(reason="陣取りゲーム 大会終了によるお片付け")
@@ -1584,7 +1610,7 @@ class TerritoryCog(commands.Cog):
                 except discord.Forbidden:
                     errors.append(f"ロール {role.name} の削除に失敗（権限不足）")
 
-            channel = guild.get_channel(tr["channel_id"]) if tr.get("channel_id") else None
+            channel = await self._resolve_channel(guild, tr.get("channel_id"))
             if channel is not None:
                 try:
                     await channel.delete(reason="陣取りゲーム 大会終了によるお片付け")
@@ -1592,7 +1618,7 @@ class TerritoryCog(commands.Cog):
                 except discord.Forbidden:
                     errors.append(f"チャンネル {channel.name} の削除に失敗（権限不足）")
 
-            voice = guild.get_channel(tr["voice_channel_id"]) if tr.get("voice_channel_id") else None
+            voice = await self._resolve_channel(guild, tr.get("voice_channel_id"))
             if voice is not None:
                 try:
                     await voice.delete(reason="陣取りゲーム 大会終了によるお片付け")
@@ -1600,6 +1626,36 @@ class TerritoryCog(commands.Cog):
                 except discord.Forbidden:
                     errors.append(f"VC {voice.name} の削除に失敗（権限不足）")
 
+        settings = await db_manager.get_territory_settings(guild.id) or {}
+
+        # 参加者ロールは残し、現在のメンバーから外すだけ
+        participant_role = await self._resolve_role(guild, settings.get("participant_role_id"))
+        if participant_role is not None:
+            for member in list(participant_role.members):
+                try:
+                    await member.remove_roles(participant_role, reason="陣取りゲーム 大会終了によるお片付け")
+                    unassigned_members += 1
+                except discord.Forbidden:
+                    errors.append(f"{member.display_name} からの参加者ロール解除に失敗（権限不足）")
+
+        # 全体雑談ch・VCは削除する
+        participant_channel = await self._resolve_channel(guild, settings.get("participant_channel_id"))
+        if participant_channel is not None:
+            try:
+                await participant_channel.delete(reason="陣取りゲーム 大会終了によるお片付け")
+                deleted_channels += 1
+            except discord.Forbidden:
+                errors.append(f"チャンネル {participant_channel.name} の削除に失敗（権限不足）")
+
+        participant_voice = await self._resolve_channel(guild, settings.get("participant_voice_channel_id"))
+        if participant_voice is not None:
+            try:
+                await participant_voice.delete(reason="陣取りゲーム 大会終了によるお片付け")
+                deleted_voice += 1
+            except discord.Forbidden:
+                errors.append(f"VC {participant_voice.name} の削除に失敗（権限不足）")
+
+        await db_manager.clear_territory_participant_channels(guild.id)
         await db_manager.clear_territory_team_roles(guild.id)
         await db_manager.clear_territory_teams(guild.id)
         await db_manager.clear_territory_matches(guild.id)
@@ -1613,6 +1669,7 @@ class TerritoryCog(commands.Cog):
         embed.add_field(name="削除したロール", value=str(deleted_roles), inline=True)
         embed.add_field(name="削除したチャンネル", value=str(deleted_channels), inline=True)
         embed.add_field(name="削除したVC", value=str(deleted_voice), inline=True)
+        embed.add_field(name="参加者ロールを外した人数", value=str(unassigned_members), inline=True)
         embed.add_field(
             name="リセットしたデータ",
             value="登録プロフィール・チーム分け・対戦履歴・陣地マップ",
@@ -1620,11 +1677,11 @@ class TerritoryCog(commands.Cog):
         )
         if errors:
             embed.add_field(name="⚠️ 一部失敗", value="\n".join(errors)[:1024], inline=False)
-        embed.set_footer(text="参加者ロール・全体雑談ch/VCは維持されています（次回もそのまま使えます）")
+        embed.set_footer(text="参加者ロール自体は維持されています（次回はメンバーへの再付与のみで使えます）")
 
         logger.info(
             f"territory_cleanup: guild={guild.id} roles={deleted_roles} channels={deleted_channels} "
-            f"voice={deleted_voice} errors={len(errors)}"
+            f"voice={deleted_voice} unassigned={unassigned_members} errors={len(errors)}"
         )
         return embed
 
@@ -1634,20 +1691,25 @@ class TerritoryCog(commands.Cog):
     )
     @app_commands.default_permissions(manage_guild=True)
     async def territory_cleanup(self, interaction: discord.Interaction):
+        guild = interaction.guild
         team_role_rows = await db_manager.get_territory_team_roles(interaction.guild_id)
+        settings = await db_manager.get_territory_settings(interaction.guild_id) or {}
 
-        if not team_role_rows:
+        participant_role = await self._resolve_role(guild, settings.get("participant_role_id"))
+        participant_channel = await self._resolve_channel(guild, settings.get("participant_channel_id"))
+        participant_voice = await self._resolve_channel(guild, settings.get("participant_voice_channel_id"))
+
+        if not team_role_rows and participant_role is None and participant_channel is None and participant_voice is None:
             await interaction.response.send_message(
-                "削除対象のチームロール・チャンネルが見つかりませんでした。", ephemeral=True
+                "削除対象のロール・チャンネルが見つかりませんでした。", ephemeral=True
             )
             return
 
-        guild = interaction.guild
         lines = []
         for tr in team_role_rows:
-            role = guild.get_role(tr["role_id"]) if tr.get("role_id") else None
-            channel = guild.get_channel(tr["channel_id"]) if tr.get("channel_id") else None
-            voice = guild.get_channel(tr["voice_channel_id"]) if tr.get("voice_channel_id") else None
+            role = await self._resolve_role(guild, tr.get("role_id"))
+            channel = await self._resolve_channel(guild, tr.get("channel_id"))
+            voice = await self._resolve_channel(guild, tr.get("voice_channel_id"))
             parts = [p for p in (
                 role.mention if role else None,
                 channel.mention if channel else None,
@@ -1662,11 +1724,22 @@ class TerritoryCog(commands.Cog):
                 "以下のチームロール・チャンネル・VCを削除し、登録プロフィール・チーム分け・"
                 "対戦履歴・陣地マップをリセットします。\n"
                 "**この操作は取り消せません。**\n\n"
-                "参加者ロール・全体雑談ch/VCは削除されません（次回もそのまま使えます）。"
+                "参加者ロールは残し、現在のメンバーから外すだけです（全体雑談ch・VCは削除します）。"
             ),
             color=discord.Color.from_rgb(230, 126, 34),
         )
-        embed.add_field(name="削除対象", value="\n".join(lines), inline=False)
+        embed.add_field(name="削除対象（チーム）", value="\n".join(lines) if lines else "なし", inline=False)
+
+        participant_parts = [p for p in (
+            f"{participant_role.mention}（メンバーから解除）" if participant_role else None,
+            participant_channel.mention if participant_channel else None,
+            f"🔊{participant_voice.mention}" if participant_voice else None,
+        ) if p]
+        embed.add_field(
+            name="参加者関連",
+            value="\n".join(participant_parts) if participant_parts else "なし",
+            inline=False,
+        )
 
         view = TerritoryCleanupConfirmView(self, interaction.user.id, team_role_rows)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)

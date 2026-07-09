@@ -1709,3 +1709,14 @@ async def clear_all_territory_profiles() -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("DELETE FROM territory_profiles")
         await db.commit()
+
+async def clear_territory_participant_channels(guild_id: int) -> None:
+    """参加者共通の雑談ch・VCのIDのみをクリアする（参加者ロール自体は維持）"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """UPDATE territory_settings
+               SET participant_channel_id = NULL, participant_voice_channel_id = NULL
+               WHERE guild_id = ?""",
+            (guild_id,),
+        )
+        await db.commit()
