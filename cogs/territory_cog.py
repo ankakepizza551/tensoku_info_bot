@@ -966,6 +966,10 @@ class TerritoryCog(commands.Cog):
         team_count="チーム数",
         role="参加者を示すロール（省略時は `/territory_register` で自動付与される参加者ロールを使用）",
         category="チームチャンネルを作成するカテゴリ（省略時は前回指定したカテゴリ、なければカテゴリなし）",
+        captain1="大将に指定するメンバー（省略時はその枠を上級者からランダム選出）",
+        captain2="大将に指定するメンバー（省略時はその枠を上級者からランダム選出）",
+        captain3="大将に指定するメンバー（省略時はその枠を上級者からランダム選出）",
+        captain4="大将に指定するメンバー（省略時はその枠を上級者からランダム選出）",
     )
     @app_commands.choices(
         team_count=[
@@ -980,6 +984,10 @@ class TerritoryCog(commands.Cog):
         team_count: app_commands.Choice[int],
         role: discord.Role = None,
         category: discord.CategoryChannel = None,
+        captain1: discord.Member = None,
+        captain2: discord.Member = None,
+        captain3: discord.Member = None,
+        captain4: discord.Member = None,
     ):
         guild = interaction.guild
         settings = await db_manager.get_territory_settings(interaction.guild_id) or {}
@@ -1025,17 +1033,53 @@ class TerritoryCog(commands.Cog):
             )
             return
 
-        captain_pool = [m for m in participants if profiles[m.id]["strength"] == 3]
-        if len(captain_pool) < n_teams:
+        manual_captains = [c for c in (captain1, captain2, captain3, captain4) if c is not None]
+
+        if len({c.id for c in manual_captains}) != len(manual_captains):
             await interaction.response.send_message(
-                f"❌ 大将候補（上級者）が{n_teams}人未満です（現在{len(captain_pool)}人）。"
-                "上級者の登録者を増やしてから再度実行してください。",
+                "❌ 大将の指定に同じ人が重複しています。", ephemeral=True
+            )
+            return
+
+        if len(manual_captains) > n_teams:
+            await interaction.response.send_message(
+                f"❌ 大将の指定人数（{len(manual_captains)}人）がチーム数（{n_teams}）を超えています。",
+                ephemeral=True,
+            )
+            return
+
+        for m in manual_captains:
+            if m.id not in profiles:
+                await interaction.response.send_message(
+                    f"❌ {m.display_name} さんは対象ロールに未登録のため大将に指定できません。",
+                    ephemeral=True,
+                )
+                return
+            if profiles[m.id]["strength"] != 3:
+                await interaction.response.send_message(
+                    f"❌ {m.display_name} さんは上級者（強さ3）ではないため大将に指定できません。",
+                    ephemeral=True,
+                )
+                return
+
+        manual_captain_ids = {c.id for c in manual_captains}
+        remaining_slots = n_teams - len(manual_captains)
+
+        captain_pool = [
+            m for m in participants
+            if profiles[m.id]["strength"] == 3 and m.id not in manual_captain_ids
+        ]
+        if len(captain_pool) < remaining_slots:
+            await interaction.response.send_message(
+                f"❌ 大将候補（上級者）が不足しています（あと{remaining_slots}人必要、現在{len(captain_pool)}人）。"
+                "上級者の登録者を増やすか、大将を指定してから再度実行してください。",
                 ephemeral=True,
             )
             return
 
         random.shuffle(captain_pool)
-        captains = captain_pool[:n_teams]
+        captains = manual_captains + captain_pool[:remaining_slots]
+        random.shuffle(captains)
         captain_ids = {c.id for c in captains}
 
         remaining = [m for m in participants if m.id not in captain_ids]
