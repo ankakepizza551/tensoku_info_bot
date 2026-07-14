@@ -1,4 +1,5 @@
 import datetime
+import logging
 from typing import Optional
 
 import discord
@@ -6,6 +7,8 @@ from discord import app_commands
 from discord.ext import commands
 
 import database.db_manager as db
+
+logger = logging.getLogger("TensokuMatchBot")
 
 JST = datetime.timezone(datetime.timedelta(hours=9))
 WEEKDAYS_JP = ["月", "火", "水", "木", "金", "土", "日"]
@@ -309,7 +312,8 @@ class CalendarCog(commands.Cog):
             return
         try:
             msg = await ch.fetch_message(int(record["message_id"]))
-        except Exception:
+        except Exception as e:
+            logger.warning(f"カレンダーメッセージの取得に失敗しました (guild_id={guild_id}): {e}")
             return
         events = await db.get_events(guild_id)
         embed = build_calendar_embed(record["display_year"], record["display_month"], events)

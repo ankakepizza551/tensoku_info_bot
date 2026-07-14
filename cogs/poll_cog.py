@@ -1,5 +1,6 @@
 import datetime
 import json
+import logging
 from typing import Optional
 
 import discord
@@ -7,6 +8,8 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 import database.db_manager as db
+
+logger = logging.getLogger("TensokuMatchBot")
 
 JST = datetime.timezone(datetime.timedelta(hours=9))
 
@@ -612,8 +615,8 @@ class PollCog(commands.Cog):
                     )
                     await msg.edit(embed=embed, view=None)
                     await ch.send("⏰ 投票アンケートの時間が終了しました。\n**最終結果:**", embed=embed)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"投票アンケートの自動締め切りに失敗しました (poll_id={poll['poll_id']}): {e}")
 
     # ── /poll ────────────────────────────────────────────────
 
@@ -770,8 +773,8 @@ class PollCog(commands.Cog):
             if ch:
                 msg = await ch.fetch_message(int(message_id))
                 await msg.edit(embed=result_embed, view=None)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"投票アンケートメッセージの更新に失敗しました (poll_id={poll['poll_id']}): {e}")
 
         await interaction.response.send_message(
             "✅ 投票アンケートを締め切りました。\n**最終結果:**",
@@ -826,7 +829,8 @@ class PollCog(commands.Cog):
             if ch:
                 msg = await ch.fetch_message(int(message_id))
                 await msg.edit(embed=embed)
-        except Exception:
+        except Exception as e:
+            logger.warning(f"投票アンケートメッセージの更新に失敗しました (poll_id={message_id}): {e}")
             await interaction.response.send_message(
                 "❌ メッセージの更新に失敗しました。", ephemeral=True
             )
@@ -929,8 +933,8 @@ class PollCog(commands.Cog):
                     is_active=False,
                 )
                 await msg.edit(embed=embed, view=None)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"アンケートメッセージの更新に失敗しました (survey_id={message_id}): {e}")
 
         await interaction.response.send_message(
             "✅ アンケートを締め切りました。", ephemeral=True
