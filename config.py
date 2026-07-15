@@ -20,11 +20,19 @@ def _parse_channel_id(env_key: str) -> int:
 
 LETTER_ADMIN_CHANNEL_ID = _parse_channel_id("LETTER_ADMIN_CHANNEL_ID")
 
-# Railway環境（ボリュームマウント先 /app/data があるか、または環境変数がある場合）は自動でパスを設定
-if os.path.exists("/app/data") or "RAILWAY_ENVIRONMENT" in os.environ:
+# Railway環境では必ず /app/data のVolumeにDBを置く。
+# Volumeが未マウントのまま起動するとコンテナの一時ディスクに空DBが作られ、
+# 再起動・再デプロイのたびにデータが消えてしまうため、未マウント時は起動を止める。
+if "RAILWAY_ENVIRONMENT" in os.environ:
+    if not os.path.isdir("/app/data"):
+        raise RuntimeError(
+            "RailwayのVolumeが /app/data にマウントされていません。"
+            "Railwayダッシュボードの Volumes タブでこのサービスに"
+            "マウントパス /app/data のVolumeを追加してから再起動してください。"
+            "（このまま起動するとデータが保存されません）"
+        )
     DB_PATH = "/app/data/tensoku_stats.db"
 else:
     DB_PATH = os.getenv("DB_PATH", "data/tensoku_stats.db")
-
-# Create data directory if it doesn't exist
-os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    # Create data directory if it doesn't exist（ローカル開発用）
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
