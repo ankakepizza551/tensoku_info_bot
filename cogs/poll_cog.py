@@ -804,12 +804,6 @@ class PollCog(commands.Cog):
             )
             return
 
-        if not poll["is_active"]:
-            await interaction.response.send_message(
-                "⚠️ このアンケートはすでに終了しています。", ephemeral=True
-            )
-            return
-
         options = json.loads(poll["options"])
         vote_rows = await db.get_poll_votes(message_id)
         is_anonymous = bool(poll["is_anonymous"]) if "is_anonymous" in poll.keys() else True
@@ -818,17 +812,19 @@ class PollCog(commands.Cog):
             question=poll["question"],
             options=options,
             vote_rows=vote_rows,
-            is_active=True,
+            is_active=bool(poll["is_active"]),
             allow_multiple=bool(poll["allow_multiple"]),
             deadline=poll["deadline"],
             voter_names_per_option=voter_names,
         )
 
         try:
-            ch = self.bot.get_channel(poll["channel_id"])
-            if ch:
-                msg = await ch.fetch_message(int(message_id))
+            ch = self.bot.get_channel(poll["channel_id"]) or await self.bot.fetch_channel(poll["channel_id"])
+            msg = await ch.fetch_message(int(message_id))
+            if poll["is_active"]:
                 await msg.edit(embed=embed)
+            else:
+                await msg.edit(embed=embed, view=None)
         except Exception as e:
             logger.warning(f"投票アンケートメッセージの更新に失敗しました (poll_id={message_id}): {e}")
             await interaction.response.send_message(
@@ -836,8 +832,9 @@ class PollCog(commands.Cog):
             )
             return
 
+        status_note = "（このアンケートはすでに終了しています）" if not poll["is_active"] else ""
         await interaction.response.send_message(
-            "✅ 投票アンケートの表示を更新しました。", ephemeral=True
+            f"✅ 投票アンケートの表示を更新しました。{status_note}", ephemeral=True
         )
 
     # ── /poll_panel ──────────────────────────────────────────
