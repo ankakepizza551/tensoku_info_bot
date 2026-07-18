@@ -206,6 +206,17 @@ async def init_db():
         """)
         await db.commit()
 
+        # letters テーブルに admin_message_id（管理チャンネル投稿のメッセージID）、
+        # is_hidden（非表示フラグ）が存在しない場合は追加
+        async with db.execute("PRAGMA table_info(letters)") as cursor:
+            letter_columns = [row[1] for row in await cursor.fetchall()]
+        if "admin_message_id" not in letter_columns:
+            await db.execute("ALTER TABLE letters ADD COLUMN admin_message_id INTEGER")
+            await db.commit()
+        if "is_hidden" not in letter_columns:
+            await db.execute("ALTER TABLE letters ADD COLUMN is_hidden INTEGER DEFAULT 0")
+            await db.commit()
+
         # 投票アンケートテーブル
         await db.execute("""
             CREATE TABLE IF NOT EXISTS polls (
