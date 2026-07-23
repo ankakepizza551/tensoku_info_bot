@@ -145,6 +145,70 @@ class ReplyModal(discord.ui.Modal, title="💬 お便りに返信する"):
         )
 
 
+class ReplyEditModal(discord.ui.Modal, title="💬 返信内容を編集"):
+    def __init__(self, message: discord.Message, embed: discord.Embed, field_index: int):
+        super().__init__()
+        self.message = message
+        self.embed = embed
+        self.field_index = field_index
+        current_text = embed.fields[field_index].value
+        self.reply_body = discord.ui.TextInput(
+            label="返信内容",
+            style=discord.TextStyle.paragraph,
+            max_length=1000,
+            required=True,
+            default=current_text,
+        )
+        self.add_item(self.reply_body)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        field = self.embed.fields[self.field_index]
+        self.embed.set_field_at(
+            self.field_index, name=field.name, value=self.reply_body.value, inline=field.inline
+        )
+        await self.message.edit(embed=self.embed)
+        await interaction.response.send_message("✅ 返信内容を編集しました。", ephemeral=True)
+        logger.info(
+            f"tegami_reply_edit: admin={interaction.user.id} message_id={self.message.id}"
+        )
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
+        logger.error(f"ReplyEditModal エラー: {error}")
+        await interaction.response.send_message(
+            "❌ 編集中にエラーが発生しました。しばらくしてから再試行してください。",
+            ephemeral=True,
+        )
+
+
+@app_commands.context_menu(name="お便り返信を編集")
+@app_commands.default_permissions(administrator=True)
+async def edit_letter_reply(interaction: discord.Interaction, message: discord.Message):
+    if message.author.id != interaction.client.user.id or not message.embeds:
+        await interaction.response.send_message(
+            "❌ このメッセージはBotが投稿したお便り返信ではありません。",
+            ephemeral=True,
+        )
+        return
+
+    embed = message.embeds[0]
+    if not embed.title or "への返信" not in embed.title:
+        await interaction.response.send_message(
+            "❌ このメッセージはお便り返信ではありません。",
+            ephemeral=True,
+        )
+        return
+
+    field_index = next((i for i, f in enumerate(embed.fields) if f.name == "返信"), None)
+    if field_index is None:
+        await interaction.response.send_message(
+            "❌ このメッセージに返信内容が見つかりませんでした。",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.send_modal(ReplyEditModal(message, embed, field_index))
+
+
 class LetterPanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -166,6 +230,12 @@ class LetterCog(commands.Cog):
 
     async def cog_load(self):
         self.bot.add_view(LetterPanelView())
+        self.bot.tree.add_command(edit_letter_reply)
+
+    async def cog_unload(self):
+        self.bot.tree.remove_command(
+            edit_letter_reply.name, type=discord.AppCommandType.message
+        )
 
     @app_commands.command(name="tegami", description="匿名でお便りを送ります（送信者名は表示されません）")
     async def tegami(self, interaction: discord.Interaction):
