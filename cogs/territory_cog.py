@@ -20,27 +20,27 @@ TEAM_ROLE_COLORS = [
 PARTICIPANT_ROLE_NAME = "陣取り参加者"
 
 
-def _neighbors(idx: int) -> list:
-    """5x5グリッド(行優先インデックス)における上下左右の隣接マスを返す"""
-    r, c = divmod(idx, 5)
+def _neighbors(idx: int, side: int) -> list:
+    """side x sideグリッド(行優先インデックス)における上下左右の隣接マスを返す"""
+    r, c = divmod(idx, side)
     result = []
     if r > 0:
-        result.append(idx - 5)
-    if r < 4:
-        result.append(idx + 5)
+        result.append(idx - side)
+    if r < side - 1:
+        result.append(idx + side)
     if c > 0:
         result.append(idx - 1)
-    if c < 4:
+    if c < side - 1:
         result.append(idx + 1)
     return result
 
 
-def _compute_frontier(owner_map: dict, team_index: int) -> set:
+def _compute_frontier(owner_map: dict, team_index: int, side: int) -> set:
     """指定チームの陣地に隣接する、まだそのチームが所有していないマスの集合を返す"""
     frontier = set()
-    for idx in range(25):
+    for idx in range(side * side):
         if owner_map.get(idx) == team_index:
-            for n in _neighbors(idx):
+            for n in _neighbors(idx, side):
                 if owner_map.get(n) != team_index:
                     frontier.add(n)
     return frontier
@@ -100,19 +100,27 @@ def _build_teams_embed(teams: list, channel_map: dict = None, voice_map: dict = 
     return embed
 
 
-class TerritoryCellButton(discord.ui.Button):
-    def __init__(self, cell_index: int, label: str, style: discord.ButtonStyle, disabled: bool, row: int):
-        super().__init__(style=style, label=label, disabled=disabled, row=row)
-        self.cell_index = cell_index
+class TerritoryCellSelect(discord.ui.Select):
+    """フロンティア(隣接候補)マスから塗り替えるマスを複数選ぶセレクトメニュー。
+    Discordのボタン式View(最大25個)では盤面拡大に対応できないため、セレクトメニュー(1つあたり最大25選択肢)を使用する"""
+
+    def __init__(self, options: list, max_values: int):
+        super().__init__(
+            placeholder="塗り替えるマスを選択してください",
+            min_values=1,
+            max_values=max_values,
+            options=options,
+        )
 
     async def callback(self, interaction: discord.Interaction):
-        await self.view.handle_click(interaction, self.cell_index)
+        cell_indices = [int(v) for v in self.values]
+        await self.view.handle_select(interaction, cell_indices)
 
 
 class TerritoryExpansionView(discord.ui.View):
     """勝利チームが侵略度分だけ隣接マスを自由に選んで塗り替えるための一時View（隣接候補が侵略度を超える場合のみ使用）"""
 
-    def __init__(self, cog: "TerritoryCog", guild_id: int, team_index: int, owner_map: dict, frontier: set, remaining: int):
+    def __init__(self, cog: "TerritoryCog", guild_id: int, team_index: int, owner_map: dict, frontier: set, remaining: int, side: int):
         super().__init__(timeout=600)
         self.cog = cog
         self.guild_id = guild_id
@@ -120,22 +128,20 @@ class TerritoryExpansionView(discord.ui.View):
         self.owner_map = dict(owner_map)
         self.frontier = set(frontier)
         self.remaining = remaining
+        self.side = side
         self.message: discord.Message | None = None
-        self._build_buttons()
+        self._build_select()
 
-    def _build_buttons(self):
+    def _build_select(self):
         self.clear_items()
-        for idx in range(25):
-            r, c = divmod(idx, 5)
-            if idx in self.frontier and self.remaining > 0:
-                btn = TerritoryCellButton(idx, f"{r + 1}-{c + 1}", discord.ButtonStyle.success, False, r)
-            else:
-                owner = self.owner_map.get(idx)
-                label = TEAM_EMOJIS[owner] if owner is not None else "⬜"
-                btn = TerritoryCellButton(idx, label, discord.ButtonStyle.secondary, True, r)
-            self.add_item(btn)
+        max_values = min(self.remaining, len(self.frontier), 25)
+        options = []
+        for idx in sorted(self.frontier)[:25]:
+            r, c = divmod(idx, self.side)
+            options.append(discord.SelectOption(label=f"{r + 1}-{c + 1}", value=str(idx)))
+        self.add_item(TerritoryCellSelect(options, max_values))
 
-    async def handle_click(self, interaction: discord.Interaction, cell_index: int):
+    async def handle_select(self, interaction: discord.Interaction, cell_indices: list):
         team_row = await db_manager.get_territory_team_of_user(self.guild_id, interaction.user.id)
         if team_row is None or team_row["team_index"] != self.team_index:
             await interaction.response.send_message(
@@ -143,34 +149,38 @@ class TerritoryExpansionView(discord.ui.View):
             )
             return
 
-        if cell_index not in self.frontier or self.remaining <= 0:
+        cell_indices = [idx for idx in cell_indices if idx in self.frontier][: self.remaining]
+        if not cell_indices:
             await interaction.response.send_message("❌ このマスは選択できません。", ephemeral=True)
             return
 
-        await db_manager.set_territory_grid_cell(self.guild_id, cell_index, self.team_index)
-        self.owner_map[cell_index] = self.team_index
-        self.frontier.discard(cell_index)
-        self.remaining -= 1
+        for cell_index in cell_indices:
+            await db_manager.set_territory_grid_cell(self.guild_id, cell_index, self.team_index)
+            self.owner_map[cell_index] = self.team_index
+            self.frontier.discard(cell_index)
+            self.remaining -= 1
 
-        for n in _neighbors(cell_index):
-            if self.owner_map.get(n) != self.team_index:
-                self.frontier.add(n)
-            else:
-                self.frontier.discard(n)
+            for n in _neighbors(cell_index, self.side):
+                if self.owner_map.get(n) != self.team_index:
+                    self.frontier.add(n)
+                else:
+                    self.frontier.discard(n)
 
         finished = self.remaining <= 0 or not self.frontier
-        self._build_buttons()
         embed = await self.cog._build_grid_embed(self.guild_id)
 
         if finished:
             self.stop()
+            self.clear_items()
             content = f"✅ {TEAM_LABELS[self.team_index]} の陣地拡張が完了しました！"
+            await interaction.response.edit_message(content=content, embed=embed, view=self)
         else:
+            self._build_select()
             content = f"🗺️ 残り{self.remaining}マス選択できます（{TEAM_LABELS[self.team_index]}）"
+            await interaction.response.edit_message(content=content, embed=embed, view=self)
 
-        await interaction.response.edit_message(content=content, embed=embed, view=self)
         logger.info(
-            f"territory_expand: guild={self.guild_id} team={self.team_index} cell={cell_index} "
+            f"territory_expand: guild={self.guild_id} team={self.team_index} cells={cell_indices} "
             f"remaining={self.remaining}"
         )
 
@@ -1187,10 +1197,11 @@ class TerritoryCog(commands.Cog):
 
         owner_map = {g["cell_index"]: g["team_index"] for g in grid}
         n_teams = max(owner_map.values()) + 1
+        side = int(round(len(grid) ** 0.5))
 
         rows_lines = [
-            " ".join(TEAM_EMOJIS[owner_map[r * 5 + c]] for c in range(5))
-            for r in range(5)
+            " ".join(TEAM_EMOJIS[owner_map[r * side + c]] for c in range(side))
+            for r in range(side)
         ]
 
         counts = [0] * n_teams
@@ -1198,7 +1209,7 @@ class TerritoryCog(commands.Cog):
             counts[v] += 1
 
         embed = discord.Embed(
-            title="🗺️ 陣取りゲーム 陣地マップ (5×5)",
+            title=f"🗺️ 陣取りゲーム 陣地マップ ({side}×{side})",
             description="\n".join(rows_lines),
             color=discord.Color.from_rgb(52, 152, 219),
         )
@@ -1215,7 +1226,8 @@ class TerritoryCog(commands.Cog):
             return  # マップ未初期化（旧チーム分けなど）の場合は何もしない
 
         owner_map = {g["cell_index"]: g["team_index"] for g in grid}
-        frontier = _compute_frontier(owner_map, team_index)
+        side = int(round(len(grid) ** 0.5))
+        frontier = _compute_frontier(owner_map, team_index, side)
 
         if not frontier:
             await interaction.followup.send(
@@ -1233,7 +1245,7 @@ class TerritoryCog(commands.Cog):
             )
             return
 
-        view = TerritoryExpansionView(self, guild_id, team_index, owner_map, frontier, invasion_score)
+        view = TerritoryExpansionView(self, guild_id, team_index, owner_map, frontier, invasion_score, side)
         embed = await self._build_grid_embed(guild_id)
         msg = await interaction.followup.send(
             content=(

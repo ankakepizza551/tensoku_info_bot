@@ -29,7 +29,15 @@ __all__ = [
     "clear_territory_grid",
     "clear_all_territory_profiles",
     "clear_territory_participant_channels",
+    "grid_side_for_team_count",
 ]
+
+# チーム数ごとの盤面の一辺の長さ（奇数のみ対応。中央マスをタイブレークに使うため）
+GRID_SIDE_BY_TEAM_COUNT = {2: 7, 4: 9}
+
+
+def grid_side_for_team_count(team_count: int) -> int:
+    return GRID_SIDE_BY_TEAM_COUNT.get(team_count, 5)
 
 
 async def save_territory_profile(
@@ -179,33 +187,38 @@ async def get_territory_invasion_totals(guild_id: int) -> dict:
         return {r["winner_team"]: r["total"] for r in rows}
 
 def _territory_grid_layout(team_count: int) -> list:
-    """5x5グリッド(25マス、行優先インデックス0〜24)の初期配置を返す"""
-    if team_count == 2:
-        # 上(13マス) / 下(12マス) の分割
-        return [0 if i < 13 else 1 for i in range(25)]
+    """side x sideグリッド(行優先インデックス)の初期配置を返す"""
+    side = grid_side_for_team_count(team_count)
+    total = side * side
+    mid = side // 2
 
-    # 4チーム: 四隅から各6マス程度の連結した領域に分割
+    if team_count != 4:
+        # 上半分 / 下半分 の分割（team_countが2以外の場合もこの方式にフォールバック）
+        half = (total + 1) // 2
+        return [0 if i < half else 1 for i in range(total)]
+
+    # 4チーム: 四隅から連結した領域に分割（中央の行・列は最近傍の象限に寄せる）
     layout = []
-    for r in range(5):
-        for c in range(5):
-            if r < 2 and c < 2:
+    for r in range(side):
+        for c in range(side):
+            if r < mid and c < mid:
                 q = 0
-            elif r < 2 and c > 2:
+            elif r < mid and c > mid:
                 q = 1
-            elif r > 2 and c < 2:
+            elif r > mid and c < mid:
                 q = 2
-            elif r > 2 and c > 2:
+            elif r > mid and c > mid:
                 q = 3
-            elif r == 2 and c < 2:
-                q = 2 if c == 0 else 0
-            elif r == 2 and c > 2:
-                q = 1 if c == 3 else 3
-            elif c == 2 and r < 2:
-                q = 0 if r == 0 else 1
-            elif c == 2 and r > 2:
-                q = 2 if r == 3 else 3
+            elif r == mid and c < mid:
+                q = 2 if c < mid // 2 else 0
+            elif r == mid and c > mid:
+                q = 1 if c < mid + 1 + mid // 2 else 3
+            elif c == mid and r < mid:
+                q = 0 if r < mid // 2 else 1
+            elif c == mid and r > mid:
+                q = 2 if r < mid + 1 + mid // 2 else 3
             else:
-                q = 0  # 中央マス(2,2)
+                q = 0  # 中央マス(mid, mid)
             layout.append(q)
     return layout
 
