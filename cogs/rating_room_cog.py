@@ -146,6 +146,29 @@ async def _sync_queue_board(bot: commands.Bot, guild: discord.Guild):
         logger.warning(f"rating_queue_board 更新失敗: {e}")
 
 
+async def _notify_queue_start(
+    bot: commands.Bot, guild: discord.Guild, settings: dict, user: discord.Member
+):
+    """誰もいない待機列に最初の1人が入ったとき、通知チャンネルに告知する（未設定なら何もしない）"""
+    notify_channel_id = settings.get("notify_channel_id")
+    if not notify_channel_id:
+        return
+
+    channel = guild.get_channel(notify_channel_id)
+    if not isinstance(channel, discord.TextChannel):
+        return
+
+    mention_role_id = settings.get("mention_role_id")
+    mention = f"<@&{mention_role_id}> " if mention_role_id else ""
+    try:
+        await channel.send(
+            f"{mention}⚔️ {user.mention} がレーティングルームで対戦相手を募集中です！\n"
+            "`/rating_queue_join` で参加すると自動でマッチングされます。"
+        )
+    except discord.HTTPException as e:
+        logger.warning(f"rating_queue_start 通知失敗: {e}")
+
+
 async def _user_in_active_rating_thread(user_id: int) -> bool:
     threads = await db_manager.get_active_rating_threads()
     for t in threads:
@@ -825,6 +848,8 @@ class RatingRoomCog(commands.Cog):
         if candidate is None:
             await db_manager.join_rating_queue(interaction.user.id, interaction.guild_id)
             await _sync_queue_board(self.bot, interaction.guild)
+            if not queue:
+                await _notify_queue_start(self.bot, interaction.guild, settings, interaction.user)
             await interaction.followup.send(
                 "⏳ マッチングキューに参加しました。希望レート差の範囲内の相手が見つかり次第、対戦スレッドを作成します。",
                 ephemeral=True,
@@ -991,24 +1016,33 @@ class RatingRoomCog(commands.Cog):
     )
     @app_commands.describe(
         forum_channel="マッチ成立時にスレッドを作成するフォーラムチャンネル",
+        notify_channel="誰かが募集（キュー参加）を開始したときに告知するチャンネル（任意）",
+        mention_role="募集告知の際にメンションするロール（任意）",
     )
     @app_commands.default_permissions(manage_guild=True)
     async def setup_rating_room(
         self,
         interaction: discord.Interaction,
         forum_channel: discord.ForumChannel,
+        notify_channel: discord.TextChannel | None = None,
+        mention_role: discord.Role | None = None,
     ):
         await db_manager.save_rating_settings(
             guild_id=interaction.guild_id,
             forum_channel_id=forum_channel.id,
-            notify_channel_id=None,
-            mention_role_id=None,
+            notify_channel_id=notify_channel.id if notify_channel else None,
+            mention_role_id=mention_role.id if mention_role else None,
         )
 
         desc = (
             f"マッチ成立時、{forum_channel.mention} に対戦スレッドを作成します。\n"
             "マッチ成立の通知は、マッチした本人2人にのみDMで送られます（他の場所には公開されません）。"
         )
+        if notify_channel:
+            desc += (
+                f"\n誰もいない状態から誰かがキューに参加すると、{notify_channel.mention} に告知されます"
+                + (f"（{mention_role.mention} をメンション）。" if mention_role else "。")
+            )
 
         embed = discord.Embed(
             title="✅ レーティングルーム設定完了",
