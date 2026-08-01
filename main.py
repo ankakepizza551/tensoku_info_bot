@@ -35,6 +35,7 @@ COGS = [
     "cogs.forum_article_cog",
     "cogs.rating_room_cog",
     "cogs.territory_cog",
+    "cogs.main_char_cog",
 ]
 
 # インテントの設定

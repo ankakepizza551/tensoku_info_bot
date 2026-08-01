@@ -456,3 +456,14 @@ async def init_db():
             )
         """)
         await db.commit()
+
+        # 普段のメインキャラクター登録（1人1キャラ、変更可）
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS main_characters (
+                user_id INTEGER PRIMARY KEY,
+                username TEXT NOT NULL,
+                character TEXT NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await db.commit()
