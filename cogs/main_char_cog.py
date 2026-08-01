@@ -103,9 +103,76 @@ class MainCharListView(discord.ui.View):
         self.add_item(MainCharListSelect(by_character))
 
 
+async def _build_list_response(records: list) -> tuple[discord.Embed, discord.ui.View | None]:
+    """分布Embedと一覧選択Viewをまとめて作成する"""
+    if not records:
+        embed = discord.Embed(
+            title="🎮 メインキャラクター分布",
+            description="まだ誰も登録していません。`/main_char` で登録してみましょう！",
+            color=_DISTRIBUTION_COLOR
+        )
+        return embed, None
+
+    by_character: dict[str, list[str]] = {}
+    for r in records:
+        by_character.setdefault(r["character"], []).append(r["username"])
+
+    embed = _build_distribution_embed(records)
+    return embed, MainCharListView(by_character)
+
+
+# ─────────────────────────────────────────────
+#  常設パネル（ボタン式）
+# ─────────────────────────────────────────────
+
+class MainCharPanelRegisterButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(
+            style=discord.ButtonStyle.primary,
+            label="メインキャラを登録・変更",
+            emoji="🎮",
+            custom_id="main_char_panel_register",
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_message(
+            "登録するメインキャラクターを選んでください。",
+            view=MainCharView(interaction.user.id),
+            ephemeral=True,
+        )
+
+
+class MainCharPanelListButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(
+            style=discord.ButtonStyle.secondary,
+            label="分布を見る",
+            emoji="📊",
+            custom_id="main_char_panel_list",
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        records = await db_manager.get_all_main_characters()
+        embed, view = await _build_list_response(records)
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+
+
+class MainCharPanelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(MainCharPanelRegisterButton())
+        self.add_item(MainCharPanelListButton())
+
+
 class MainCharCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        """Bot起動・再接続時に常設パネルのViewを再登録する"""
+        self.bot.add_view(MainCharPanelView())
 
     @app_commands.command(name="main_char", description="あなたの普段のメインキャラクターを登録・変更します")
     async def main_char(self, interaction: discord.Interaction):
@@ -118,23 +185,34 @@ class MainCharCog(commands.Cog):
     @app_commands.command(name="main_char_list", description="サーバー内のメインキャラクター分布と一覧を表示します")
     async def main_char_list(self, interaction: discord.Interaction):
         await interaction.response.defer()
-
         records = await db_manager.get_all_main_characters()
-        if not records:
-            embed = discord.Embed(
-                title="🎮 メインキャラクター分布",
-                description="まだ誰も登録していません。`/main_char` で登録してみましょう！",
-                color=_DISTRIBUTION_COLOR
-            )
-            await interaction.followup.send(embed=embed)
+        embed, view = await _build_list_response(records)
+        await interaction.followup.send(embed=embed, view=view)
+
+    @app_commands.command(
+        name="main_char_panel",
+        description="メインキャラ登録・分布表示を行える常設パネルを設置します（サーバー管理者のみ）",
+    )
+    @app_commands.describe(channel="設置するチャンネル（省略時は現在のチャンネル）")
+    async def main_char_panel(self, interaction: discord.Interaction, channel: discord.TextChannel = None):
+        if not interaction.user.guild_permissions.manage_guild:
+            await interaction.response.send_message("❌ このコマンドはサーバー管理者のみ使用できます。", ephemeral=True)
             return
 
-        by_character: dict[str, list[str]] = {}
-        for r in records:
-            by_character.setdefault(r["character"], []).append(r["username"])
-
-        embed = _build_distribution_embed(records)
-        await interaction.followup.send(embed=embed, view=MainCharListView(by_character))
+        target_channel = channel or interaction.channel
+        embed = discord.Embed(
+            title="🎮 メインキャラクター登録パネル",
+            description=(
+                "下のボタンから、普段のメインキャラクターの登録・変更や、\n"
+                "サーバー内のメインキャラクター分布の確認ができます。"
+            ),
+            color=_DISTRIBUTION_COLOR,
+        )
+        await target_channel.send(embed=embed, view=MainCharPanelView())
+        await interaction.response.send_message(
+            f"✅ メインキャラ登録パネルを {target_channel.mention} に設置しました。",
+            ephemeral=True,
+        )
 
 async def setup(bot):
     await bot.add_cog(MainCharCog(bot))
