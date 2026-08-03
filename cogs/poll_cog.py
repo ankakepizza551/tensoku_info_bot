@@ -397,8 +397,8 @@ class PollCreateModal(discord.ui.Modal, title="投票アンケートを作成"):
         max_length=200,
     )
     options_field = discord.ui.TextInput(
-        label="選択肢（カンマ区切り・2〜10個）",
-        placeholder="例: 霊夢,魔理沙,チルノ",
+        label="選択肢（カンマ区切り・1〜10個）",
+        placeholder="例: 参加 　※1個だけでも作成できます",
         required=True,
         max_length=300,
     )
@@ -430,9 +430,9 @@ class PollCreateModal(discord.ui.Modal, title="投票アンケートを作成"):
         question = self.question_field.value.strip()
         option_list = [o.strip() for o in self.options_field.value.split(",") if o.strip()]
 
-        if len(option_list) < 2:
+        if len(option_list) < 1:
             await interaction.response.send_message(
-                "❌ 選択肢は2個以上をカンマ区切りで入力してください。\n例: `霊夢,魔理沙,チルノ`",
+                "❌ 選択肢を1個以上入力してください。\n例: `参加` または `霊夢,魔理沙,チルノ`",
                 ephemeral=True,
             )
             return
@@ -626,7 +626,7 @@ class PollCog(commands.Cog):
     )
     @app_commands.describe(
         question="アンケートの質問",
-        options="選択肢をカンマ区切りで入力（2〜10個）例: 霊夢,魔理沙,チルノ",
+        options="選択肢をカンマ区切りで入力（1〜10個）例: 参加 / 霊夢,魔理沙,チルノ",
         allow_multiple="複数選択を許可するか（デフォルト: はい）",
         anonymous="投票を匿名にするか（デフォルト: はい）終了時に非匿名なら誰が何に投票したか表示",
         deadline="締め切り日時（例: 2026-06-30 23:59）省略可",
@@ -645,9 +645,9 @@ class PollCog(commands.Cog):
         target_channel = channel or interaction.channel
         option_list = [o.strip() for o in options.split(",") if o.strip()]
 
-        if len(option_list) < 2:
+        if len(option_list) < 1:
             await interaction.response.send_message(
-                "❌ 選択肢は2個以上をカンマ区切りで入力してください。\n例: `霊夢,魔理沙,チルノ`",
+                "❌ 選択肢を1個以上入力してください。\n例: `参加` または `霊夢,魔理沙,チルノ`",
                 ephemeral=True,
             )
             return
