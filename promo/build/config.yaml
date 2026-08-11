@@ -1,0 +1,44 @@
+resolution: [1920, 1080]
+preview_resolution: [960, 540]
+fps: 30
+
+fonts:
+  # ffmpeg drawtext/ass 用フォントパス
+  primary: "C:/Windows/Fonts/YuGothB.ttc"
+  fallback: "C:/Windows/Fonts/NotoSansJP-VF.ttf"
+  # ass の \fn で指定するフォント名(fontconfig非依存で確実に当てたい場合は primary のファイル名が読めるフォント名を指定)
+  ass_font_name: "Yu Gothic"
+
+telop:
+  font_size: 58
+  color_default: "&H00FFFFFF"   # ASS BGR: 白
+  outline_color: "&H00000000"   # 黒縁
+  outline_width: 3
+  position: bottom               # bottom | top | center
+  margin_v: 90
+  fade_in_ms: 200
+  fade_out_ms: 200
+
+# PARTごとのプレースホルダー背景色(0xRRGGBB, ffmpeg color= 用)
+placeholder_colors:
+  A: "0xB0202A"
+  B: "0x7A1620"
+  C: "0x1A2A3A"
+  D: "0xB0202A"
+  E: "0x202020"
+  F: "0x000000"
+
+placeholder_text_size: 40
+
+bgm_gain_db: -3
+bgm_fade_out_sec: 2.0
+
+paths:
+  shots_json: "output/shots.json"
+  ass_file: "output/telop.ass"
+  tmp_dir: "output/tmp"
+  clips_dir: "assets/clips"
+  bgm_dir: "assets/bgm"
+  se_dir: "assets/se"
+  preview_out: "output/preview.mp4"
+  final_out: "output/final.mp4"

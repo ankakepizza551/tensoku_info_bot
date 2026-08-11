@@ -13,3 +13,12 @@ ENV/
 data/
 *.db
 *.log
+
+# Promo video tool: generated output & large media assets
+promo/output/
+promo/assets/clips/*
+promo/assets/bgm/*
+promo/assets/se/*
+!promo/assets/clips/.gitkeep
+!promo/assets/bgm/.gitkeep
+!promo/assets/se/.gitkeep

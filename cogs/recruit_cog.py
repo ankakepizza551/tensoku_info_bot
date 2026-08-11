@@ -136,14 +136,24 @@ class MatchReportModal(discord.ui.Modal):
                 inline=True
             )
             
-            # 元の募集メッセージを対戦終了ステータスにしてボタンを削除
+            # 元の募集メッセージを対戦終了ステータスにして、再募集/締切を選べるボタンに切り替え
             closed_embed = discord.Embed(
                 title="⚔️ 対戦終了 (Closed)",
-                description=f"{recruiter.mention} vs {challenger.mention}\n対戦は終了しました。結果はチャンネル内に新規投稿されました。",
+                description=(
+                    f"{recruiter.mention} vs {challenger.mention}\n"
+                    f"対戦は終了しました。結果はチャンネル内に新規投稿されました。\n\n"
+                    f"募集者（{recruiter.mention}）は、続けて再募集するか募集を締め切るか選択してください。"
+                ),
                 color=discord.Color.from_rgb(127, 140, 141) # 灰色
             )
-            await interaction.message.edit(embed=closed_embed, view=None)
-            
+            post_match_view = PostMatchView(
+                recruiter=recruiter,
+                comment=self.recruit_view.comment,
+                format_str=self.recruit_view.format_str
+            )
+            await interaction.message.edit(embed=closed_embed, view=post_match_view)
+            post_match_view.message = interaction.message
+
             # 結果をチャンネルに送信
             await interaction.followup.send(embed=embed)
             self.recruit_view.stop()
@@ -211,6 +221,71 @@ class RecruitView(discord.ui.View):
         )
         await interaction.response.edit_message(embed=embed, view=None)
         self.stop()
+
+class PostMatchView(discord.ui.View):
+    def __init__(self, recruiter: discord.Member, comment: str, format_str: str):
+        super().__init__(timeout=600) # 10分以内に選択がなければ自動的に募集を締め切る
+        self.recruiter = recruiter
+        self.comment = comment
+        self.format_str = format_str
+        self.message = None
+
+    async def on_timeout(self):
+        if self.message is None:
+            return
+        embed = discord.Embed(
+            title="⏱️ 募集締切 (Closed)",
+            description=f"{self.recruiter.mention} の対戦募集は時間経過のため自動的に締め切られました。",
+            color=discord.Color.from_rgb(127, 140, 141) # 灰色
+        )
+        try:
+            await self.message.edit(embed=embed, view=None)
+        except discord.HTTPException:
+            pass
+
+    @discord.ui.button(label="再募集する", style=discord.ButtonStyle.primary)
+    async def re_recruit(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.recruiter.id:
+            await interaction.response.send_message("❌ 再募集の選択は募集者本人のみ可能です。", ephemeral=True)
+            return
+
+        # 最新のレートを取得して再募集を作成
+        user_info = await db_manager.get_or_create_user(self.recruiter.id, self.recruiter.display_name)
+        rating = user_info["rating"] if "rating" in user_info.keys() else 1500.0
+
+        embed = discord.Embed(
+            title="⚔️ 対戦相手募集 (LFG)",
+            description=f"{self.recruiter.mention} が対戦相手を再募集しています！\n「対戦を申し込む」ボタンを押すとマッチングが成立します。",
+            color=discord.Color.from_rgb(52, 152, 219) # 青色
+        )
+        embed.set_thumbnail(url=self.recruiter.display_avatar.url)
+        embed.add_field(name="募集者レート", value=f"`{round(rating, 1)}`", inline=True)
+        embed.add_field(name="募集形式", value=self.format_str, inline=True)
+        embed.add_field(name="コメント", value=self.comment, inline=False)
+
+        new_view = RecruitView(
+            recruiter=self.recruiter,
+            recruiter_rating=rating,
+            comment=self.comment,
+            format_str=self.format_str
+        )
+
+        self.stop()
+        await interaction.response.edit_message(embed=embed, view=new_view)
+
+    @discord.ui.button(label="募集を締め切る", style=discord.ButtonStyle.secondary)
+    async def close_recruit(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.recruiter.id:
+            await interaction.response.send_message("❌ 募集の締め切りは募集者本人のみ可能です。", ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title="🔒 募集締切 (Closed)",
+            description=f"{self.recruiter.mention} の対戦募集は締め切られました。ありがとうございました！",
+            color=discord.Color.from_rgb(127, 140, 141) # 灰色
+        )
+        self.stop()
+        await interaction.response.edit_message(embed=embed, view=None)
 
 class RecruitCog(commands.Cog):
     def __init__(self, bot):

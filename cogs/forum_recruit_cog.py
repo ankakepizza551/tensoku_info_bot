@@ -633,6 +633,14 @@ class RecruitForumPanelView(discord.ui.View):
         btn.callback = self._btn_callback
         self.add_item(btn)
 
+        stats_btn = discord.ui.Button(
+            label="📊 自分のスタッツ",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"forum_recruit_stats_btn:{forum_channel_id}",
+        )
+        stats_btn.callback = _stats_callback
+        self.add_item(stats_btn)
+
     async def _btn_callback(self, interaction: discord.Interaction):
         # send_modal は defer できず3秒以内に直接応答する必要があるため、
         # DB読み込みが遅延してもモーダル表示自体は失敗しないようにタイムアウトを設ける
