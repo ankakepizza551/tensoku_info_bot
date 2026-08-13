@@ -10,6 +10,9 @@ __all__ = [
     "get_raid_advanced_statuses",
     "save_raid_status_board",
     "get_raid_status_board",
+    "clear_raid_battle_settings",
+    "clear_raid_advanced_statuses",
+    "clear_raid_status_board",
 ]
 
 
@@ -100,3 +103,21 @@ async def get_raid_status_board(guild_id: int) -> dict | None:
         ) as cursor:
             row = await cursor.fetchone()
         return dict(row) if row else None
+
+
+async def clear_raid_battle_settings(guild_id: int) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM raid_battle_settings WHERE guild_id = ?", (guild_id,))
+        await db.commit()
+
+
+async def clear_raid_advanced_statuses(guild_id: int) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM raid_advanced_status WHERE guild_id = ?", (guild_id,))
+        await db.commit()
+
+
+async def clear_raid_status_board(guild_id: int) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM raid_status_board WHERE guild_id = ?", (guild_id,))
+        await db.commit()

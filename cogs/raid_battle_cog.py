@@ -97,6 +97,54 @@ async def _sync_status_board(guild: discord.Guild):
 
 
 # ─────────────────────────────────────────────
+#  お片付け（レイド終了後のクリーンアップ）
+# ─────────────────────────────────────────────
+
+class RaidCleanupConfirmView(discord.ui.View):
+    """お片付け(カテゴリ・チャンネル・ロールの削除+データリセット)の実行前確認View"""
+
+    def __init__(self, cog: "RaidBattleCog", invoker_id: int, settings: dict):
+        super().__init__(timeout=120)
+        self.cog = cog
+        self.invoker_id = invoker_id
+        self.settings = settings
+        self.message: discord.Message | None = None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.invoker_id and not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message(
+                "❌ コマンドを実行した本人または管理者のみ操作できます。", ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="🗑️ 削除を実行", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(content="🧹 削除処理を実行中...", embed=None, view=self)
+        result_embed = await self.cog._execute_raid_cleanup(interaction.guild, self.settings)
+        await interaction.edit_original_response(content=None, embed=result_embed, view=None)
+        self.stop()
+
+    @discord.ui.button(label="キャンセル", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(content="キャンセルしました。", embed=None, view=self)
+        self.stop()
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(content="⏰ 確認時間が終了しました。お片付けは実行されていません。", view=self)
+            except discord.HTTPException:
+                pass
+
+
+# ─────────────────────────────────────────────
 #  常設操作パネル（登録・対応状況切り替え）
 # ─────────────────────────────────────────────
 
@@ -455,6 +503,158 @@ class RaidBattleCog(commands.Cog):
             f"✅ 対応状況ボードを {channel.mention} に設置しました。", ephemeral=True
         )
         logger.info(f"setup_raid_status_board: guild={guild.id} channel={channel.id} message={board_msg.id}")
+
+    # ── /raid_registered_list ─────────────────────
+
+    @app_commands.command(
+        name="raid_registered_list",
+        description="現在登録されている初級者/上級者の一覧をコピペ用テキストで出力します（管理者用）",
+    )
+    @app_commands.default_permissions(manage_guild=True)
+    async def raid_registered_list(self, interaction: discord.Interaction):
+        guild = interaction.guild
+        settings = await db_manager.get_raid_battle_settings(guild.id)
+        if not settings or not settings.get("beginner_role_id") or not settings.get("advanced_role_id"):
+            await interaction.response.send_message(
+                "❌ このサーバーではレイドバトルが未設定です。", ephemeral=True
+            )
+            return
+
+        beginner_role = await _resolve_role(guild, settings.get("beginner_role_id"))
+        advanced_role = await _resolve_role(guild, settings.get("advanced_role_id"))
+
+        lines = []
+        if beginner_role:
+            for m in beginner_role.members:
+                lines.append(f"{m.display_name} - 初級者")
+        if advanced_role:
+            for m in advanced_role.members:
+                lines.append(f"{m.display_name} - 上級者")
+
+        if not lines:
+            await interaction.response.send_message("登録者がいません。", ephemeral=True)
+            return
+
+        # Discordのメッセージ長制限(2000文字)対策で複数チャンクに分割する
+        chunks = []
+        current = ""
+        for line in lines:
+            candidate = f"{current}\n{line}" if current else line
+            if len(candidate) > 1900:
+                chunks.append(current)
+                current = line
+            else:
+                current = candidate
+        if current:
+            chunks.append(current)
+
+        await interaction.response.send_message(f"```\n{chunks[0]}\n```", ephemeral=True)
+        for chunk in chunks[1:]:
+            await interaction.followup.send(f"```\n{chunk}\n```", ephemeral=True)
+
+        logger.info(f"raid_registered_list: guild={guild.id} count={len(lines)}")
+
+    # ── お片付け（レイド終了後のクリーンアップ） ──
+
+    async def _execute_raid_cleanup(self, guild: discord.Guild, settings: dict) -> discord.Embed:
+        deleted_channels = 0
+        deleted_roles = 0
+        errors = []
+
+        for key in ("recruit_channel_id", "beginner_channel_id", "advanced_channel_id", "common_channel_id"):
+            channel = await _resolve_channel(guild, settings.get(key))
+            if channel is not None:
+                try:
+                    await channel.delete(reason="レイドバトル 終了によるお片付け")
+                    deleted_channels += 1
+                except discord.Forbidden:
+                    errors.append(f"チャンネル {channel.name} の削除に失敗（権限不足）")
+
+        category = await _resolve_channel(guild, settings.get("category_id"))
+        if category is not None:
+            try:
+                await category.delete(reason="レイドバトル 終了によるお片付け")
+            except discord.Forbidden:
+                errors.append(f"カテゴリ {category.name} の削除に失敗（権限不足）")
+
+        for key in ("beginner_role_id", "advanced_role_id"):
+            role = await _resolve_role(guild, settings.get(key))
+            if role is not None:
+                try:
+                    await role.delete(reason="レイドバトル 終了によるお片付け")
+                    deleted_roles += 1
+                except discord.Forbidden:
+                    errors.append(f"ロール {role.name} の削除に失敗（権限不足）")
+
+        await db_manager.clear_raid_battle_settings(guild.id)
+        await db_manager.clear_raid_advanced_statuses(guild.id)
+        await db_manager.clear_raid_status_board(guild.id)
+
+        embed = discord.Embed(
+            title="🧹 レイドバトル お片付け完了",
+            color=discord.Color.from_rgb(46, 204, 113),
+        )
+        embed.add_field(name="削除したチャンネル/カテゴリ", value=str(deleted_channels + (1 if category else 0)), inline=True)
+        embed.add_field(name="削除したロール", value=str(deleted_roles), inline=True)
+        embed.add_field(
+            name="リセットしたデータ",
+            value="設定・対応状況ボードの紐付け・上級者の対応状況",
+            inline=False,
+        )
+        if errors:
+            embed.add_field(name="⚠️ 一部失敗", value="\n".join(errors)[:1024], inline=False)
+        embed.set_footer(text="次回は /setup_raid_battle で最初から作り直せます。")
+
+        logger.info(
+            f"raid_cleanup: guild={guild.id} channels={deleted_channels} roles={deleted_roles} errors={len(errors)}"
+        )
+        return embed
+
+    @app_commands.command(
+        name="raid_cleanup",
+        description="レイドバトル終了後のお片付け（カテゴリ・チャンネル・ロールの削除+データリセット）を行います（管理者用）",
+    )
+    @app_commands.default_permissions(manage_guild=True)
+    async def raid_cleanup(self, interaction: discord.Interaction):
+        guild = interaction.guild
+        settings = await db_manager.get_raid_battle_settings(guild.id) or {}
+
+        category = await _resolve_channel(guild, settings.get("category_id"))
+        channels = {
+            "募集チャンネル": await _resolve_channel(guild, settings.get("recruit_channel_id")),
+            "初級者専用チャンネル": await _resolve_channel(guild, settings.get("beginner_channel_id")),
+            "上級者専用チャンネル": await _resolve_channel(guild, settings.get("advanced_channel_id")),
+            "共通チャンネル": await _resolve_channel(guild, settings.get("common_channel_id")),
+        }
+        beginner_role = await _resolve_role(guild, settings.get("beginner_role_id"))
+        advanced_role = await _resolve_role(guild, settings.get("advanced_role_id"))
+
+        if category is None and not any(channels.values()) and beginner_role is None and advanced_role is None:
+            await interaction.response.send_message(
+                "削除対象のカテゴリ・チャンネル・ロールが見つかりませんでした。", ephemeral=True
+            )
+            return
+
+        lines = [f"カテゴリ: {category.name}" if category else "カテゴリ: (すでに存在しません)"]
+        for label, ch in channels.items():
+            lines.append(f"{label}: {ch.mention if ch else '(すでに存在しません)'}")
+        lines.append(f"初級者ロール: {beginner_role.mention if beginner_role else '(すでに存在しません)'}")
+        lines.append(f"上級者ロール: {advanced_role.mention if advanced_role else '(すでに存在しません)'}")
+
+        embed = discord.Embed(
+            title="⚠️ レイドバトル お片付け確認",
+            description=(
+                "以下のカテゴリ・チャンネル・ロールをすべて削除し、登録・対応状況データをリセットします。\n"
+                "**この操作は取り消せません。**\n\n"
+                "登録者リストが必要な場合は、先に `/raid_registered_list` で出力しておいてください。"
+            ),
+            color=discord.Color.from_rgb(230, 126, 34),
+        )
+        embed.add_field(name="削除対象", value="\n".join(lines), inline=False)
+
+        view = RaidCleanupConfirmView(self, interaction.user.id, settings)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        view.message = await interaction.original_response()
 
 
 async def setup(bot: commands.Bot):
