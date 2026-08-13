@@ -36,6 +36,7 @@ COGS = [
     "cogs.rating_room_cog",
     "cogs.territory_cog",
     "cogs.main_char_cog",
+    "cogs.raid_battle_cog",
 ]
 
 # インテントの設定
