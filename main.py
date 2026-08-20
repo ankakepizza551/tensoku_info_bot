@@ -140,7 +140,11 @@ async def main():
                 logger.info(f"Cogロード成功: {cog}")
             except Exception as e:
                 logger.error(f"Cogロード失敗 {cog}: {e}")
-                
+
+        # 陣取りマップ配信用サーバーの起動
+        from overlay.server import start_overlay_server
+        await start_overlay_server()
+
         # Botの起動
         logger.info("Bot接続開始...")
         await bot.start(config.TOKEN)
