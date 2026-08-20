@@ -30,6 +30,9 @@ __all__ = [
     "clear_all_territory_profiles",
     "clear_territory_participant_channels",
     "grid_side_for_team_count",
+    "get_territory_current_round",
+    "increment_territory_round",
+    "reset_territory_round",
 ]
 
 # チーム数ごとの盤面の一辺の長さ（奇数のみ対応。中央マスをタイブレークに使うため）
@@ -128,14 +131,16 @@ async def get_territory_team_of_user(guild_id: int, user_id: int) -> dict | None
 async def add_territory_match(
     guild_id: int, reporter_id: int, winner_id: int, loser_id: int,
     winner_team: int, loser_team: int, invasion_score: int, captain_defeated: bool,
+    round: int = 1,
 ) -> int:
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
             """INSERT INTO territory_matches
-               (guild_id, reporter_id, winner_id, loser_id, winner_team, loser_team, invasion_score, captain_defeated)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+               (guild_id, reporter_id, winner_id, loser_id, winner_team, loser_team,
+                invasion_score, captain_defeated, round)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (guild_id, reporter_id, winner_id, loser_id, winner_team, loser_team,
-             invasion_score, int(captain_defeated)),
+             invasion_score, int(captain_defeated), round),
         )
         await db.commit()
         return cursor.lastrowid
@@ -167,13 +172,50 @@ async def get_territory_matches(guild_id: int) -> list:
             rows = await cursor.fetchall()
         return [dict(r) for r in rows]
 
-async def get_territory_fought_user_ids(guild_id: int) -> set:
+async def get_territory_fought_user_ids(guild_id: int, round: int) -> set:
+    """指定した周回内で、すでに出場済み（1回対戦済み）のユーザーID集合を返す"""
     matches = await get_territory_matches(guild_id)
     fought = set()
     for m in matches:
+        if m["round"] != round:
+            continue
         fought.add(m["winner_id"])
         fought.add(m["loser_id"])
     return fought
+
+
+async def get_territory_current_round(guild_id: int) -> int:
+    settings = await get_territory_settings(guild_id)
+    if settings is None or settings.get("current_round") is None:
+        return 1
+    return settings["current_round"]
+
+
+async def increment_territory_round(guild_id: int) -> int:
+    """陣取りゲームの周回を1つ進め、進めた後の周回番号を返す"""
+    current = await get_territory_current_round(guild_id)
+    new_round = current + 1
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT INTO territory_settings (guild_id, current_round)
+               VALUES (?, ?)
+               ON CONFLICT(guild_id) DO UPDATE SET current_round=excluded.current_round""",
+            (guild_id, new_round),
+        )
+        await db.commit()
+    return new_round
+
+
+async def reset_territory_round(guild_id: int) -> None:
+    """陣取りゲームの周回を1にリセットする（チーム再抽選時に使用）"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT INTO territory_settings (guild_id, current_round)
+               VALUES (?, 1)
+               ON CONFLICT(guild_id) DO UPDATE SET current_round=1""",
+            (guild_id,),
+        )
+        await db.commit()
 
 async def get_territory_invasion_totals(guild_id: int) -> dict:
     async with aiosqlite.connect(DB_PATH) as db:

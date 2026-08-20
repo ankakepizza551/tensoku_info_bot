@@ -89,11 +89,19 @@ async def init_db():
                 loser_team INTEGER NOT NULL,
                 invasion_score INTEGER NOT NULL,
                 captain_defeated INTEGER DEFAULT 0,
+                round INTEGER NOT NULL DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
         await db.commit()
+
+        # territory_matches に round が存在しない場合は追加（周回機能）
+        async with db.execute("PRAGMA table_info(territory_matches)") as cursor:
+            tm_columns = [row[1] for row in await cursor.fetchall()]
+        if "round" not in tm_columns:
+            await db.execute("ALTER TABLE territory_matches ADD COLUMN round INTEGER NOT NULL DEFAULT 1")
+            await db.commit()
 
         # 陣取りゲーム 陣地マップ(5x5グリッド)テーブル
         await db.execute(
@@ -118,11 +126,19 @@ async def init_db():
                 participant_channel_id INTEGER,
                 participant_voice_channel_id INTEGER,
                 reception_channel_id INTEGER,
-                hq_channel_id INTEGER
+                hq_channel_id INTEGER,
+                current_round INTEGER NOT NULL DEFAULT 1
             )
             """
         )
         await db.commit()
+
+        # territory_settings に current_round が存在しない場合は追加（周回機能）
+        async with db.execute("PRAGMA table_info(territory_settings)") as cursor:
+            ts_columns_round = [row[1] for row in await cursor.fetchall()]
+        if "current_round" not in ts_columns_round:
+            await db.execute("ALTER TABLE territory_settings ADD COLUMN current_round INTEGER NOT NULL DEFAULT 1")
+            await db.commit()
 
         # territory_settings に participant_channel_id が存在しない場合は追加
         async with db.execute("PRAGMA table_info(territory_settings)") as cursor:
