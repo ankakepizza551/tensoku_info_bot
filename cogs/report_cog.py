@@ -3,6 +3,7 @@ from discord import app_commands
 from discord.ext import commands
 import aiosqlite
 from database import db_manager
+from rank_roles import sync_rank_role
 
 CHARACTERS = [
     "博麗霊夢", "霧雨魔理沙", "十六夜咲夜", "アリス", "パチュリー",
@@ -166,6 +167,13 @@ class ReportCog(commands.Cog):
                     
                 embed.add_field(name="削除された対戦", value=f"{name1} `{match_data['score1']}` vs `{match_data['score2']}` {name2}", inline=False)
                 await interaction.response.send_message(embed=embed)
+
+                if interaction.guild is not None:
+                    for uid in (p1_id, p2_id):
+                        member = interaction.guild.get_member(uid)
+                        if member is not None:
+                            user_info = await db_manager.get_or_create_user(member.id, member.display_name)
+                            await sync_rank_role(member, user_info["rating"])
             else:
                 await interaction.response.send_message(f"❌ 対戦ID `{match_id}` の戦績削除に失敗しました。", ephemeral=True)
                 

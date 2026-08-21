@@ -9,6 +9,7 @@ __all__ = [
     "get_match",
     "get_user_stats",
     "get_leaderboard",
+    "get_all_rated_users",
 ]
 
 
@@ -239,6 +240,15 @@ async def get_user_stats(user_id: int, only_rated: bool = False) -> dict:
             "character_stats": char_stats,
             "head_to_head": h2h_stats
         }
+
+async def get_all_rated_users() -> list:
+    """レーティングが記録されている全ユーザー（user_id, username, rating）を返す"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT user_id, username, rating FROM users") as cursor:
+            rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
 
 async def get_leaderboard(min_matches: int = 1) -> list:
     """ランキング（リーダーボード）を取得。試合数が min_matches 以上のユーザーが対象"""

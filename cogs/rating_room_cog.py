@@ -5,7 +5,8 @@ from discord import app_commands
 from discord.ext import commands
 
 from database import db_manager
-from rating_ranks import get_rank
+from rating_ranks import get_rank, get_rank_info
+from rank_roles import sync_rank_role, ensure_all_rank_roles
 from cogs.report_cog import CHARACTERS
 from cogs.forum_recruit_cog import find_character
 
@@ -44,15 +45,17 @@ async def _build_rating_stats_embed(member: discord.Member) -> discord.Embed:
     profile = await db_manager.get_rating_profile(member.id)
     user_info = await db_manager.get_or_create_user(member.id, member.display_name)
     rating = user_info["rating"]
-    rank = get_rank(rating)
+    tier = get_rank_info(rating)
+    rank = tier["name"]
 
     embed = discord.Embed(
         title=f"🏆 {member.display_name} のレーティングルームスタッツ",
-        color=discord.Color.from_rgb(155, 89, 182),
+        color=discord.Color(tier["color"]),
     )
     embed.set_thumbnail(url=member.display_avatar.url)
     embed.add_field(name="レート", value=f"`{round(rating, 1)}`", inline=True)
     embed.add_field(name="ランク", value=f"`{rank}`", inline=True)
+    embed.add_field(name="ランク概要", value=tier["description"], inline=False)
 
     if profile is None:
         embed.add_field(
@@ -353,6 +356,9 @@ class RatingMatchReportModal(discord.ui.Modal):
             await self.panel_message.edit(embed=closed_embed, view=completed_view)
             await db_manager.update_rating_thread_status(self.thread_id, "completed")
             await db_manager.update_rating_thread_match_id(self.thread_id, result["match_id"])
+
+            await sync_rank_role(self.player1, result["new_rating1"])
+            await sync_rank_role(self.player2, result["new_rating2"])
 
             await interaction.followup.send(embed=result_embed)
             logger.info(
@@ -1125,6 +1131,39 @@ class RatingRoomCog(commands.Cog):
             f"✅ 操作パネルを {channel.mention} に設置しました。", ephemeral=True
         )
         logger.info(f"setup_rating_panel: guild={interaction.guild_id} channel={channel.id}")
+
+    # ── /setup_rank_roles ─────────────────────────
+
+    @app_commands.command(
+        name="setup_rank_roles",
+        description="レーティングのランクロール（天人/妖怪/人間 全9段階）を作成し、既存メンバーに付与します（管理者用）",
+    )
+    @app_commands.default_permissions(manage_guild=True)
+    async def setup_rank_roles(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
+        roles = await ensure_all_rank_roles(interaction.guild)
+
+        users = await db_manager.get_all_rated_users()
+        synced = 0
+        for u in users:
+            member = interaction.guild.get_member(u["user_id"])
+            if member is None:
+                continue
+            await sync_rank_role(member, u["rating"])
+            synced += 1
+
+        embed = discord.Embed(
+            title="✅ ランクロール セットアップ完了",
+            description=(
+                f"ロールを {len(roles)} 件作成/確認しました。\n"
+                f"サーバー内の {synced} 人にランクロールを付与しました。\n"
+                "ロールの表示順（色の優先度）を整えたい場合は、サーバー設定のロール一覧から並び替えてください。"
+            ),
+            color=discord.Color.from_rgb(46, 204, 113),
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        logger.info(f"setup_rank_roles: guild={interaction.guild_id} roles={len(roles)} synced={synced}")
 
 
 async def setup(bot: commands.Bot):
