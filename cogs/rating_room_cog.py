@@ -49,7 +49,7 @@ async def _build_rating_stats_embed(member: discord.Member) -> discord.Embed:
     rank = tier["name"]
 
     embed = discord.Embed(
-        title=f"🏆 {member.display_name} のレーティングルームスタッツ",
+        title=f"🏆 {member.display_name} の有頂天の塔スタッツ",
         color=discord.Color(tier["color"]),
     )
     embed.set_thumbnail(url=member.display_avatar.url)
@@ -82,7 +82,7 @@ async def _build_rating_stats_embed(member: discord.Member) -> discord.Embed:
     total = stats["total_matches"]
     if total > 0:
         embed.add_field(
-            name="レーティングルーム通算成績",
+            name="有頂天の塔通算成績",
             value=f"{stats['wins']}勝 {stats['losses']}敗 ({total}試合) / 勝率 `{stats['win_rate']}%`",
             inline=False,
         )
@@ -96,8 +96,8 @@ async def _build_rating_stats_embed(member: discord.Member) -> discord.Embed:
             embed.add_field(name="直近のレーティング対戦", value="\n".join(lines), inline=False)
     else:
         embed.add_field(
-            name="レーティングルーム通算成績",
-            value="まだレーティングルームでの対戦記録がありません。",
+            name="有頂天の塔通算成績",
+            value="まだ有頂天の塔での対戦記録がありません。",
             inline=False,
         )
 
@@ -111,7 +111,7 @@ async def _rating_stats_callback(interaction: discord.Interaction):
 
 def _build_queue_board_embed(guild: discord.Guild, queue: list) -> discord.Embed:
     embed = discord.Embed(
-        title="⏳ レーティングルーム 待機状況",
+        title="⏳ 有頂天の塔 待機状況",
         color=discord.Color.from_rgb(155, 89, 182),
     )
     if not queue:
@@ -165,7 +165,7 @@ async def _notify_queue_start(
     mention = f"<@&{mention_role_id}> " if mention_role_id else ""
     try:
         await channel.send(
-            f"{mention}⚔️ {user.mention} がレーティングルームで対戦相手を募集中です！\n"
+            f"{mention}⚔️ {user.mention} が有頂天の塔で対戦相手を募集中です！\n"
             "`/rating_queue_join` で参加すると自動でマッチングされます。"
         )
     except discord.HTTPException as e:
@@ -316,7 +316,7 @@ class RatingMatchReportModal(discord.ui.Modal):
 
             is_correction = self.previous_match_id is not None
             result_embed = discord.Embed(
-                title="🔁 対戦結果 修正 (レーティングルーム)" if is_correction else "📊 対戦結果 (レーティングルーム)",
+                title="🔁 対戦結果 修正 (有頂天の塔)" if is_correction else "📊 対戦結果 (有頂天の塔)",
                 description=(
                     (f"以前の登録（Match ID: `{self.previous_match_id}`）を修正しました。\n" if is_correction else "")
                     + f"{winner_text}\n**Match ID:** `{result['match_id']}`"
@@ -572,7 +572,7 @@ class RatingDiffSelectView(discord.ui.View):
 
 class RatingRegisterModal(discord.ui.Modal):
     def __init__(self, existing: dict | None = None):
-        super().__init__(title="⚔️ レーティングルーム プロフィール登録")
+        super().__init__(title="⚔️ 有頂天の塔 プロフィール登録")
         e = existing or {}
         self.existing_max_diff = e.get("max_rating_diff") or DEFAULT_MAX_DIFF
 
@@ -640,7 +640,7 @@ class RatingRegisterModal(discord.ui.Modal):
 
         embed = discord.Embed(
             title="✅ プロフィールを登録しました",
-            description="この内容でレーティングルームの対戦に参加できます。\n"
+            description="この内容で有頂天の塔の対戦に参加できます。\n"
                         "変更したい場合は再度 `/rating_register` を実行してください。",
             color=discord.Color.from_rgb(46, 204, 113),
         )
@@ -783,7 +783,7 @@ class RatingRoomCog(commands.Cog):
 
     @app_commands.command(
         name="rating_register",
-        description="レーティングルーム用のプロフィール（1戦目のキャラ・接続情報など）を登録/変更します",
+        description="有頂天の塔用のプロフィール（1戦目のキャラ・接続情報など）を登録/変更します",
     )
     async def rating_register(self, interaction: discord.Interaction):
         existing = await db_manager.get_rating_profile(interaction.user.id)
@@ -793,7 +793,7 @@ class RatingRoomCog(commands.Cog):
 
     @app_commands.command(
         name="rating_stats",
-        description="レーティングルームのスタッツ（レート・ランク・プロフィール・戦績）を表示します",
+        description="有頂天の塔のスタッツ（レート・ランク・プロフィール・戦績）を表示します",
     )
     @app_commands.describe(user="表示したいユーザーを選択してください（指定しない場合は自分）")
     async def rating_stats(self, interaction: discord.Interaction, user: discord.Member | None = None):
@@ -805,7 +805,7 @@ class RatingRoomCog(commands.Cog):
 
     @app_commands.command(
         name="rating_queue_join",
-        description="レーティングルームのマッチングキューに参加します（お互いの希望レート差の範囲内で自動マッチング）",
+        description="有頂天の塔のマッチングキューに参加します（お互いの希望レート差の範囲内で自動マッチング）",
     )
     async def rating_queue_join(self, interaction: discord.Interaction):
         await self._handle_queue_join(interaction)
@@ -821,7 +821,7 @@ class RatingRoomCog(commands.Cog):
         settings = await db_manager.get_rating_settings(interaction.guild_id)
         if settings is None:
             await interaction.response.send_message(
-                "❌ このサーバーではレーティングルームが未設定です。管理者に `/setup_rating_room` の実行を依頼してください。",
+                "❌ このサーバーでは有頂天の塔が未設定です。管理者に `/setup_rating_room` の実行を依頼してください。",
                 ephemeral=True,
             )
             return
@@ -973,7 +973,7 @@ class RatingRoomCog(commands.Cog):
 
     @app_commands.command(
         name="rating_queue_leave",
-        description="レーティングルームのマッチングキューから抜けます",
+        description="有頂天の塔のマッチングキューから抜けます",
     )
     async def rating_queue_leave(self, interaction: discord.Interaction):
         await self._handle_queue_leave(interaction)
@@ -990,7 +990,7 @@ class RatingRoomCog(commands.Cog):
 
     @app_commands.command(
         name="rating_queue_status",
-        description="レーティングルームのマッチングキューの状況を表示します",
+        description="有頂天の塔のマッチングキューの状況を表示します",
     )
     async def rating_queue_status(self, interaction: discord.Interaction):
         await self._handle_queue_status(interaction)
@@ -998,7 +998,7 @@ class RatingRoomCog(commands.Cog):
     async def _handle_queue_status(self, interaction: discord.Interaction):
         queue = await db_manager.get_rating_queue(interaction.guild_id)
         embed = discord.Embed(
-            title="⏳ レーティングルーム キュー状況",
+            title="⏳ 有頂天の塔 キュー状況",
             color=discord.Color.from_rgb(155, 89, 182),
         )
         if not queue:
@@ -1018,7 +1018,7 @@ class RatingRoomCog(commands.Cog):
 
     @app_commands.command(
         name="setup_rating_room",
-        description="レーティングルームの対戦スレッド投稿先フォーラムを設定します（管理者用）",
+        description="有頂天の塔の対戦スレッド投稿先フォーラムを設定します（管理者用）",
     )
     @app_commands.describe(
         forum_channel="マッチ成立時にスレッドを作成するフォーラムチャンネル",
@@ -1051,7 +1051,7 @@ class RatingRoomCog(commands.Cog):
             )
 
         embed = discord.Embed(
-            title="✅ レーティングルーム設定完了",
+            title="✅ 有頂天の塔設定完了",
             description=desc,
             color=discord.Color.from_rgb(46, 204, 113),
         )
@@ -1106,7 +1106,7 @@ class RatingRoomCog(commands.Cog):
         channel: discord.TextChannel | discord.Thread,
     ):
         embed = discord.Embed(
-            title="⚔️ レーティングルーム 操作パネル",
+            title="⚔️ 有頂天の塔 操作パネル",
             description=(
                 "下のボタンから操作できます。\n"
                 "・📝 プロフィール登録/変更: 1戦目のキャラ等の登録・変更\n"
