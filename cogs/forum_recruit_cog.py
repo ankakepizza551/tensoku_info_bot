@@ -489,19 +489,19 @@ class RecruitForumModal(discord.ui.Modal):
         self.add_item(self.comment)
 
     async def on_submit(self, interaction: discord.Interaction):
-        forum_channel = interaction.guild.get_channel(self.forum_channel_id)
-        if not isinstance(forum_channel, discord.ForumChannel):
+        recruit_channel = interaction.guild.get_channel(self.forum_channel_id)
+        if not isinstance(recruit_channel, discord.TextChannel):
             await interaction.response.send_message(
-                "❌ 投稿先のフォーラムチャンネルが見つかりません。管理者にご連絡ください。",
+                "❌ 投稿先のチャンネルが見つかりません。管理者にご連絡ください。",
                 ephemeral=True,
             )
             return
 
-        perms = forum_channel.permissions_for(interaction.guild.me)
-        if not perms.create_public_threads:
+        perms = recruit_channel.permissions_for(interaction.guild.me)
+        if not (perms.send_messages and perms.create_public_threads):
             await interaction.response.send_message(
-                f"❌ {forum_channel.mention} にスレッドを作成する権限がありません。\n"
-                "管理者にBotの **「公開スレッドを作成」** 権限の付与をお願いしてください。",
+                f"❌ {recruit_channel.mention} にスレッドを作成する権限がありません。\n"
+                "管理者にBotの **「メッセージを送信」「公開スレッドを作成」** 権限の付与をお願いしてください。",
                 ephemeral=True,
             )
             return
@@ -536,11 +536,11 @@ class RecruitForumModal(discord.ui.Modal):
         await interaction.response.defer(ephemeral=True)
 
         try:
-            result = await forum_channel.create_thread(
+            recruit_message = await recruit_channel.send(embed=recruit_embed)
+            thread = await recruit_message.create_thread(
                 name=self.thread_title.value,
-                embed=recruit_embed,
+                auto_archive_duration=1440,
             )
-            thread = result.thread
 
             # コントロールパネルをスレッドに投稿
             panel_embed = discord.Embed(
@@ -584,7 +584,7 @@ class RecruitForumModal(discord.ui.Modal):
 
             logger.info(
                 f"forum_recruit: user={interaction.user.id} "
-                f"forum={forum_channel.id} thread={thread.id} panel={panel_msg.id}"
+                f"channel={recruit_channel.id} thread={thread.id} panel={panel_msg.id}"
             )
             await interaction.followup.send(
                 f"✅ 対戦募集を投稿しました！\n→ {thread.mention}",
@@ -608,7 +608,7 @@ class RecruitForumModal(discord.ui.Modal):
 
 
 # ─────────────────────────────────────────────
-#  募集ボタンパネルView（フォーラムスレッド入口用）
+#  募集ボタンパネルView（募集スレッド入口用）
 # ─────────────────────────────────────────────
 
 class RecruitForumPanelView(discord.ui.View):
@@ -713,7 +713,7 @@ class ForumRecruitCog(commands.Cog):
         description="対戦募集ボタンのパネルをこのチャンネルに設置します（管理者用）",
     )
     @app_commands.describe(
-        forum_channel="募集投稿の作成先フォーラムチャンネル",
+        recruit_channel="募集投稿の作成先チャンネル",
         notify_channel="新規募集時にメンションを送る通知チャンネル（省略可）",
         mention_role="通知時にメンションするロール（省略可）",
     )
@@ -721,7 +721,7 @@ class ForumRecruitCog(commands.Cog):
     async def setup_recruit_panel(
         self,
         interaction: discord.Interaction,
-        forum_channel: discord.ForumChannel,
+        recruit_channel: discord.TextChannel,
         notify_channel: discord.TextChannel | None = None,
         mention_role: discord.Role | None = None,
     ):
@@ -730,7 +730,7 @@ class ForumRecruitCog(commands.Cog):
 
         desc = (
             "下のボタンを押すと対戦募集フォームが開きます。\n"
-            f"入力した内容は {forum_channel.mention} に新規投稿されます。"
+            f"入力した内容は {recruit_channel.mention} に新規投稿されます。"
         )
         if notify_channel:
             desc += f"\n新規募集時は {notify_channel.mention} に通知されます。"
@@ -740,22 +740,22 @@ class ForumRecruitCog(commands.Cog):
             description=desc,
             color=discord.Color.from_rgb(52, 152, 219),
         )
-        embed.set_footer(text=f"投稿先: #{forum_channel.name}")
+        embed.set_footer(text=f"投稿先: #{recruit_channel.name}")
 
-        view = RecruitForumPanelView(forum_channel.id, notify_channel_id, mention_role_id)
+        view = RecruitForumPanelView(recruit_channel.id, notify_channel_id, mention_role_id)
         await interaction.response.send_message(embed=embed, view=view)
         message = await interaction.original_response()
 
         await db_manager.add_recruit_panel(
             message_id=message.id,
             channel_id=interaction.channel_id,
-            forum_channel_id=forum_channel.id,
+            forum_channel_id=recruit_channel.id,
             notify_channel_id=notify_channel_id,
             mention_role_id=mention_role_id,
         )
         logger.info(
             f"setup_recruit_panel: message={message.id} "
-            f"channel={interaction.channel_id} forum={forum_channel.id} "
+            f"channel={interaction.channel_id} recruit_channel={recruit_channel.id} "
             f"notify={notify_channel_id} role={mention_role_id}"
         )
 
