@@ -608,6 +608,88 @@ class RecruitForumModal(discord.ui.Modal):
 
 
 # ─────────────────────────────────────────────
+#  募集プロフィール登録モーダル（募集フォームの初期値を事前登録）
+# ─────────────────────────────────────────────
+
+class RecruitProfileModal(discord.ui.Modal):
+    def __init__(self, defaults: dict | None = None):
+        super().__init__(title="⚔️ 対戦募集 プロフィール登録")
+        d = defaults or {}
+
+        self.connection_type = discord.ui.TextInput(
+            label="IP or クラ専（必須）",
+            placeholder="例: IP / クラ専",
+            default=d.get("connection_type", ""),
+            required=True,
+            max_length=30,
+        )
+        self.match_settings = discord.ui.TextInput(
+            label="対戦設定（必須）",
+            style=discord.TextStyle.paragraph,
+            placeholder="autopunch: あり\nソクロ: なし\ngiu: あり",
+            default=d.get("match_settings", ""),
+            required=True,
+            max_length=200,
+        )
+        self.character = discord.ui.TextInput(
+            label="使用キャラ（任意）",
+            placeholder="例: 霊夢、魔理沙",
+            default=d.get("character", ""),
+            required=False,
+            max_length=50,
+        )
+        self.comment = discord.ui.TextInput(
+            label="対戦回数 / その他コメント（任意）",
+            style=discord.TextStyle.paragraph,
+            placeholder="例: 3回くらい / 初心者歓迎です！",
+            default=d.get("comment", ""),
+            required=False,
+            max_length=400,
+        )
+        self.add_item(self.connection_type)
+        self.add_item(self.match_settings)
+        self.add_item(self.character)
+        self.add_item(self.comment)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        conn = self.connection_type.value.strip()
+        settings = self.match_settings.value.strip()
+        char = self.character.value.strip()
+        comment_val = self.comment.value.strip()
+
+        await db_manager.save_recruit_defaults(
+            user_id=interaction.user.id,
+            connection_type=conn,
+            match_settings=settings,
+            character=char,
+            comment=comment_val,
+        )
+
+        embed = discord.Embed(
+            title="✅ 対戦募集プロフィールを登録しました",
+            description="次回「⚔️ 対戦を募集する」を押したとき、この内容が自動で入力された状態でフォームが開きます。\n"
+                        "変更したい場合は再度 `/recruit_register` を実行してください。",
+            color=discord.Color.from_rgb(46, 204, 113),
+        )
+        embed.add_field(name="接続方式", value=conn, inline=True)
+        embed.add_field(name="使用キャラ", value=char or "未指定", inline=True)
+        embed.add_field(name="対戦設定", value=f"```{settings}```", inline=False)
+        embed.add_field(name="対戦回数 / コメント", value=comment_val or "特になし", inline=False)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        logger.info(f"recruit_register: user={interaction.user.id}")
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
+        logger.error(f"RecruitProfileModal on_error: {error}")
+        if not interaction.response.is_done():
+            await interaction.response.send_message("❌ 登録中にエラーが発生しました。", ephemeral=True)
+
+
+async def _recruit_register_callback(interaction: discord.Interaction):
+    defaults = await db_manager.get_recruit_defaults(interaction.user.id)
+    await interaction.response.send_modal(RecruitProfileModal(defaults))
+
+
+# ─────────────────────────────────────────────
 #  募集ボタンパネルView（募集スレッド入口用）
 # ─────────────────────────────────────────────
 
@@ -632,6 +714,14 @@ class RecruitForumPanelView(discord.ui.View):
         )
         btn.callback = self._btn_callback
         self.add_item(btn)
+
+        register_btn = discord.ui.Button(
+            label="📝 プロフィール登録/変更",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"forum_recruit_register_btn:{forum_channel_id}",
+        )
+        register_btn.callback = _recruit_register_callback
+        self.add_item(register_btn)
 
         stats_btn = discord.ui.Button(
             label="📊 自分のスタッツ",
@@ -706,6 +796,16 @@ class ForumRecruitCog(commands.Cog):
         if restored:
             logger.info(f"forum_recruit: スレッドパネル {restored} 件のViewを再登録")
 
+    # ── /recruit_register ────────────────────────
+
+    @app_commands.command(
+        name="recruit_register",
+        description="対戦募集フォームの初期値（接続方式・対戦設定・使用キャラ・コメント）を事前に登録します",
+    )
+    async def recruit_register(self, interaction: discord.Interaction):
+        defaults = await db_manager.get_recruit_defaults(interaction.user.id)
+        await interaction.response.send_modal(RecruitProfileModal(defaults))
+
     # ── /setup_recruit_panel ─────────────────────
 
     @app_commands.command(
@@ -729,7 +829,9 @@ class ForumRecruitCog(commands.Cog):
         mention_role_id = mention_role.id if mention_role else None
 
         desc = (
-            "下のボタンを押すと対戦募集フォームが開きます。\n"
+            "・⚔️ 対戦を募集する: 募集フォームを開いて新規投稿\n"
+            "・📝 プロフィール登録/変更: 次回から自動入力される初期値を事前登録\n"
+            "・📊 自分のスタッツ: レート・戦績を確認\n"
             f"入力した内容は {recruit_channel.mention} に新規投稿されます。"
         )
         if notify_channel:
