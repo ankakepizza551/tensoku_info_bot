@@ -877,20 +877,20 @@ class RatingRoomCog(commands.Cog):
             return
 
         opponent_profile = await db_manager.get_rating_profile(opponent_id)
-        forum_channel = interaction.guild.get_channel(settings["forum_channel_id"])
-        if not isinstance(forum_channel, discord.ForumChannel):
+        match_channel = interaction.guild.get_channel(settings["forum_channel_id"])
+        if not isinstance(match_channel, discord.TextChannel):
             await db_manager.join_rating_queue(interaction.user.id, interaction.guild_id)
             await interaction.followup.send(
-                "❌ 投稿先のフォーラムチャンネルが見つかりません。管理者に `/setup_rating_room` の再設定を依頼してください。",
+                "❌ 投稿先のチャンネルが見つかりません。管理者に `/setup_rating_room` の再設定を依頼してください。",
                 ephemeral=True,
             )
             return
 
-        perms = forum_channel.permissions_for(interaction.guild.me)
-        if not perms.create_public_threads:
+        perms = match_channel.permissions_for(interaction.guild.me)
+        if not (perms.send_messages and perms.create_public_threads):
             await db_manager.join_rating_queue(interaction.user.id, interaction.guild_id)
             await interaction.followup.send(
-                f"❌ {forum_channel.mention} にスレッドを作成する権限がありません。管理者にご連絡ください。",
+                f"❌ {match_channel.mention} にスレッドを作成する権限がありません。管理者にご連絡ください。",
                 ephemeral=True,
             )
             return
@@ -914,11 +914,11 @@ class RatingRoomCog(commands.Cog):
         thread_embed.add_field(name=player2.display_name, value=_profile_summary(profile2, rating2), inline=True)
 
         try:
-            result = await forum_channel.create_thread(
-                name=f"レーティング対戦: {player1.display_name} vs {player2.display_name}",
-                embed=thread_embed,
+            match_message = await match_channel.send(embed=thread_embed)
+            thread = await match_message.create_thread(
+                name=f"有頂天の塔: {player1.display_name} vs {player2.display_name}",
+                auto_archive_duration=1440,
             )
-            thread = result.thread
 
             panel_embed = discord.Embed(
                 title="🎮 コントロールパネル",
@@ -1018,10 +1018,10 @@ class RatingRoomCog(commands.Cog):
 
     @app_commands.command(
         name="setup_rating_room",
-        description="有頂天の塔の対戦スレッド投稿先フォーラムを設定します（管理者用）",
+        description="有頂天の塔の対戦スレッド投稿先チャンネルを設定します（管理者用）",
     )
     @app_commands.describe(
-        forum_channel="マッチ成立時にスレッドを作成するフォーラムチャンネル",
+        match_channel="マッチ成立時に対戦スレッドを作成する通常チャンネル",
         notify_channel="誰かが募集（キュー参加）を開始したときに告知するチャンネル（任意）",
         mention_role="募集告知の際にメンションするロール（任意）",
     )
@@ -1029,19 +1029,19 @@ class RatingRoomCog(commands.Cog):
     async def setup_rating_room(
         self,
         interaction: discord.Interaction,
-        forum_channel: discord.ForumChannel,
+        match_channel: discord.TextChannel,
         notify_channel: discord.TextChannel | None = None,
         mention_role: discord.Role | None = None,
     ):
         await db_manager.save_rating_settings(
             guild_id=interaction.guild_id,
-            forum_channel_id=forum_channel.id,
+            forum_channel_id=match_channel.id,
             notify_channel_id=notify_channel.id if notify_channel else None,
             mention_role_id=mention_role.id if mention_role else None,
         )
 
         desc = (
-            f"マッチ成立時、{forum_channel.mention} に対戦スレッドを作成します。\n"
+            f"マッチ成立時、{match_channel.mention} に対戦スレッドを作成します。\n"
             "マッチ成立の通知は、マッチした本人2人にのみDMで送られます（他の場所には公開されません）。"
         )
         if notify_channel:
@@ -1057,7 +1057,7 @@ class RatingRoomCog(commands.Cog):
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
         logger.info(
-            f"setup_rating_room: guild={interaction.guild_id} forum={forum_channel.id}"
+            f"setup_rating_room: guild={interaction.guild_id} match_channel={match_channel.id}"
         )
 
     # ── /setup_rating_queue_board ────────────────
