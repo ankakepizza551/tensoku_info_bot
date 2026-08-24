@@ -517,12 +517,3 @@ async def init_db():
             )
         """)
         await db.commit()
-
-        # ウェルカムメッセージ: ギルドごとの送信先チャンネル設定
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS welcome_settings (
-                guild_id INTEGER PRIMARY KEY,
-                channel_id INTEGER NOT NULL
-            )
-        """)
-        await db.commit()
