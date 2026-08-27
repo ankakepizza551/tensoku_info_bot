@@ -517,3 +517,14 @@ async def init_db():
             )
         """)
         await db.commit()
+
+        # スレッド一覧ボード（テキストチャンネルのアクティブスレッド一覧を自動更新するピン留めメッセージ）
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS thread_index_boards (
+                channel_id INTEGER PRIMARY KEY,
+                guild_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await db.commit()

@@ -11,3 +11,4 @@ from .rating_room import *
 from .territory import *
 from .main_characters import *
 from .raid_battle import *
+from .thread_index import *
