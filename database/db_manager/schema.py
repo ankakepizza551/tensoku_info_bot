@@ -519,6 +519,7 @@ async def init_db():
         await db.commit()
 
         # スレッド一覧ボード（テキストチャンネルのアクティブスレッド一覧を自動更新するピン留めメッセージ）
+        # channel_id: スレッドを追跡する対象チャンネル / board_channel_id: 一覧を表示するチャンネル（別チャンネル指定可）
         await db.execute("""
             CREATE TABLE IF NOT EXISTS thread_index_boards (
                 channel_id INTEGER PRIMARY KEY,
@@ -528,3 +529,13 @@ async def init_db():
             )
         """)
         await db.commit()
+
+        # thread_index_boards に board_channel_id（一覧の投稿先。未指定なら追跡対象と同じ）が存在しない場合は追加
+        async with db.execute("PRAGMA table_info(thread_index_boards)") as cursor:
+            tib_columns = [row[1] for row in await cursor.fetchall()]
+        if "board_channel_id" not in tib_columns:
+            await db.execute("ALTER TABLE thread_index_boards ADD COLUMN board_channel_id INTEGER")
+            await db.execute(
+                "UPDATE thread_index_boards SET board_channel_id = channel_id WHERE board_channel_id IS NULL"
+            )
+            await db.commit()

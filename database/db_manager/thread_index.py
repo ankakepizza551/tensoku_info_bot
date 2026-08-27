@@ -10,14 +10,17 @@ __all__ = [
 ]
 
 
-async def save_thread_index_board(channel_id: int, guild_id: int, message_id: int) -> None:
+async def save_thread_index_board(
+    channel_id: int, guild_id: int, message_id: int, board_channel_id: int | None = None
+) -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            """INSERT INTO thread_index_boards (channel_id, guild_id, message_id)
-               VALUES (?, ?, ?)
+            """INSERT INTO thread_index_boards (channel_id, guild_id, message_id, board_channel_id)
+               VALUES (?, ?, ?, ?)
                ON CONFLICT(channel_id) DO UPDATE SET
-               guild_id=excluded.guild_id, message_id=excluded.message_id""",
-            (channel_id, guild_id, message_id),
+               guild_id=excluded.guild_id, message_id=excluded.message_id,
+               board_channel_id=excluded.board_channel_id""",
+            (channel_id, guild_id, message_id, board_channel_id or channel_id),
         )
         await db.commit()
 
