@@ -539,3 +539,19 @@ async def init_db():
                 "UPDATE thread_index_boards SET board_channel_id = channel_id WHERE board_channel_id IS NULL"
             )
             await db.commit()
+
+        # イベントスレッド用リマインダー（指定日時にスレッドへ通知する。1スレッドに複数件登録可）
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS event_reminders (
+                reminder_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                thread_id INTEGER NOT NULL,
+                guild_id INTEGER NOT NULL,
+                creator_id INTEGER NOT NULL,
+                fire_at TEXT NOT NULL,
+                message TEXT NOT NULL,
+                role_id INTEGER,
+                is_sent INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await db.commit()

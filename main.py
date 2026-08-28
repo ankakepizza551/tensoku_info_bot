@@ -38,6 +38,7 @@ COGS = [
     "cogs.main_char_cog",
     "cogs.raid_battle_cog",
     "cogs.thread_index_cog",
+    "cogs.event_reminder_cog",
 ]
 
 # インテントの設定
