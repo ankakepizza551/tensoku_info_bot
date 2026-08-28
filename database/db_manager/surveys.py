@@ -12,6 +12,7 @@ __all__ = [
     "get_survey_responses",
     "has_survey_responded",
     "close_survey",
+    "update_survey",
 ]
 
 
@@ -71,4 +72,13 @@ async def close_survey(survey_id: str) -> None:
     """アンケートを締め切る"""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("UPDATE surveys SET is_active = 0 WHERE survey_id = ?", (survey_id,))
+        await db.commit()
+
+async def update_survey(survey_id: str, title: str, questions: list) -> None:
+    """アンケートの内容を更新する（質問数を変える場合は既存回答がないことを呼び出し側で確認すること）"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE surveys SET title = ?, questions = ? WHERE survey_id = ?",
+            (title, json.dumps(questions, ensure_ascii=False), survey_id),
+        )
         await db.commit()

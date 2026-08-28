@@ -377,6 +377,88 @@ class SurveyCreateModal(discord.ui.Modal, title="アンケートを作成"):
         )
 
 
+class SurveyEditModal(discord.ui.Modal, title="アンケートを編集"):
+    def __init__(self, survey_id: str, survey_row, bot_instance: commands.Bot):
+        super().__init__()
+        self.survey_id = survey_id
+        current_questions = json.loads(survey_row["questions"])
+        self.old_question_count = len(current_questions)
+        self.bot_instance = bot_instance
+
+        padded = current_questions + [""] * (4 - len(current_questions))
+
+        self.survey_title_field = discord.ui.TextInput(
+            label="アンケートタイトル",
+            default=survey_row["title"],
+            required=True,
+            max_length=100,
+        )
+        self.q1 = discord.ui.TextInput(
+            label="質問1（必須）", default=padded[0], required=True, max_length=100
+        )
+        self.q2 = discord.ui.TextInput(
+            label="質問2（任意）", default=padded[1], required=False, max_length=100
+        )
+        self.q3 = discord.ui.TextInput(
+            label="質問3（任意）", default=padded[2], required=False, max_length=100
+        )
+        self.q4 = discord.ui.TextInput(
+            label="質問4（任意）", default=padded[3], required=False, max_length=100
+        )
+        self.add_item(self.survey_title_field)
+        self.add_item(self.q1)
+        self.add_item(self.q2)
+        self.add_item(self.q3)
+        self.add_item(self.q4)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        questions = [
+            q.value.strip() for q in [self.q1, self.q2, self.q3, self.q4] if q.value.strip()
+        ]
+        if not questions:
+            await interaction.response.send_message(
+                "❌ 質問が入力されていません。", ephemeral=True
+            )
+            return
+
+        responses = await db.get_survey_responses(self.survey_id)
+        if responses and len(questions) != self.old_question_count:
+            await interaction.response.send_message(
+                "❌ すでに回答がある状態では質問数を変更できません。\n"
+                "（既存の回答と質問がずれてしまうため）質問の文言だけ編集するか、"
+                "`/close_survey` で締め切って新しく `/survey` を作成してください。",
+                ephemeral=True,
+            )
+            return
+
+        title = self.survey_title_field.value.strip()
+        await db.update_survey(self.survey_id, title, questions)
+
+        survey = await db.get_survey(self.survey_id)
+        embed = build_survey_embed(
+            title=title,
+            questions=questions,
+            response_count=len(responses),
+            is_active=bool(survey["is_active"]),
+        )
+
+        try:
+            ch = self.bot_instance.get_channel(survey["channel_id"]) or await self.bot_instance.fetch_channel(
+                survey["channel_id"]
+            )
+            msg = await ch.fetch_message(int(self.survey_id))
+            await msg.edit(embed=embed)
+        except Exception as e:
+            logger.warning(f"アンケートメッセージの更新に失敗しました (survey_id={self.survey_id}): {e}")
+
+        await interaction.response.send_message("✅ アンケートを編集しました。", ephemeral=True)
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
+        await interaction.response.send_message(
+            f"⚠️ エラーが発生しました: {error}", ephemeral=True
+        )
+
+
 # ──────────────────────────────────────────────────────────────
 # 作成パネル（ボタンからアンケートを作成）
 # ──────────────────────────────────────────────────────────────
@@ -502,6 +584,139 @@ class PollCreateModal(discord.ui.Modal, title="投票アンケートを作成"):
             f"メッセージID: `{poll_id}`",
             ephemeral=True,
         )
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
+        await interaction.response.send_message(
+            f"⚠️ エラーが発生しました: {error}", ephemeral=True
+        )
+
+
+class PollEditModal(discord.ui.Modal, title="投票アンケートを編集"):
+    def __init__(self, poll_id: str, poll_row, bot_instance: commands.Bot):
+        super().__init__()
+        self.poll_id = poll_id
+        self.old_options = json.loads(poll_row["options"])
+        self.bot_instance = bot_instance
+
+        self.question_field = discord.ui.TextInput(
+            label="質問",
+            default=poll_row["question"],
+            required=True,
+            max_length=200,
+        )
+        self.options_field = discord.ui.TextInput(
+            label="選択肢（カンマ区切り・1〜10個）",
+            default=", ".join(self.old_options),
+            required=True,
+            max_length=300,
+        )
+        self.allow_multiple_field = discord.ui.TextInput(
+            label="複数選択を許可する？（はい/いいえ）",
+            default="はい" if poll_row["allow_multiple"] else "いいえ",
+            required=False,
+            max_length=10,
+        )
+        self.anonymous_field = discord.ui.TextInput(
+            label="匿名にする？（はい/いいえ）",
+            default="はい" if poll_row["is_anonymous"] else "いいえ",
+            required=False,
+            max_length=10,
+        )
+        self.deadline_field = discord.ui.TextInput(
+            label="締め切り（任意・YYYY-MM-DD HH:MM）",
+            default=poll_row["deadline"] or "",
+            required=False,
+            max_length=20,
+        )
+        self.add_item(self.question_field)
+        self.add_item(self.options_field)
+        self.add_item(self.allow_multiple_field)
+        self.add_item(self.anonymous_field)
+        self.add_item(self.deadline_field)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        question = self.question_field.value.strip()
+        option_list = [o.strip() for o in self.options_field.value.split(",") if o.strip()]
+
+        if len(option_list) < 1:
+            await interaction.response.send_message(
+                "❌ 選択肢を1個以上入力してください。", ephemeral=True
+            )
+            return
+        if len(option_list) > 10:
+            await interaction.response.send_message(
+                "❌ 選択肢は最大10個です。", ephemeral=True
+            )
+            return
+
+        vote_rows = await db.get_poll_votes(self.poll_id)
+        if vote_rows and len(option_list) != len(self.old_options):
+            await interaction.response.send_message(
+                "❌ すでに投票がある状態では選択肢の数を変更できません。\n"
+                "（既存の投票とのずれが生じるため）選択肢の文言だけ編集するか、"
+                "`/close_poll` で締め切って新しく `/poll` を作成してください。",
+                ephemeral=True,
+            )
+            return
+
+        allow_multiple = _parse_bool(self.allow_multiple_field.value, default=True)
+        anonymous = _parse_bool(self.anonymous_field.value, default=True)
+
+        deadline_str: str | None = None
+        deadline_input = self.deadline_field.value.strip()
+        if deadline_input:
+            parsed = None
+            for fmt in ("%Y-%m-%d %H:%M", "%Y/%m/%d %H:%M"):
+                try:
+                    parsed = datetime.datetime.strptime(deadline_input, fmt).replace(tzinfo=JST)
+                    break
+                except ValueError:
+                    continue
+            if parsed is None:
+                await interaction.response.send_message(
+                    "❌ 期限の形式が正しくありません。`YYYY-MM-DD HH:MM` の形式で入力してください。\n例: `2026-06-30 23:59`",
+                    ephemeral=True,
+                )
+                return
+            deadline_str = parsed.strftime("%Y-%m-%d %H:%M")
+
+        await db.update_poll(
+            self.poll_id,
+            question=question,
+            options=option_list,
+            allow_multiple=allow_multiple,
+            is_anonymous=anonymous,
+            deadline=deadline_str,
+        )
+
+        poll = await db.get_poll(self.poll_id)
+        vote_rows = await db.get_poll_votes(self.poll_id)
+        voter_names = None if anonymous else build_voter_names(vote_rows, option_list, self.bot_instance)
+        embed = build_poll_embed(
+            question=question,
+            options=option_list,
+            vote_rows=vote_rows,
+            is_active=bool(poll["is_active"]),
+            allow_multiple=allow_multiple,
+            deadline=deadline_str,
+            voter_names_per_option=voter_names,
+        )
+
+        try:
+            ch = self.bot_instance.get_channel(poll["channel_id"]) or await self.bot_instance.fetch_channel(
+                poll["channel_id"]
+            )
+            msg = await ch.fetch_message(int(self.poll_id))
+            if poll["is_active"]:
+                view = PollView(poll_id=self.poll_id, options=option_list)
+                self.bot_instance.add_view(view)
+                await msg.edit(embed=embed, view=view)
+            else:
+                await msg.edit(embed=embed)
+        except Exception as e:
+            logger.warning(f"投票アンケートメッセージの更新に失敗しました (poll_id={self.poll_id}): {e}")
+
+        await interaction.response.send_message("✅ 投票アンケートを編集しました。", ephemeral=True)
 
     async def on_error(self, interaction: discord.Interaction, error: Exception):
         await interaction.response.send_message(
@@ -837,6 +1052,39 @@ class PollCog(commands.Cog):
             f"✅ 投票アンケートの表示を更新しました。{status_note}", ephemeral=True
         )
 
+    # ── /edit_poll ───────────────────────────────────────────
+
+    @app_commands.command(
+        name="edit_poll",
+        description="投票アンケートの質問・選択肢などを編集します（作成者またはサーバー管理者のみ）",
+    )
+    @app_commands.describe(message_id="編集する投票メッセージのID")
+    async def edit_poll(self, interaction: discord.Interaction, message_id: str):
+        poll = await db.get_poll(message_id)
+        if not poll:
+            await interaction.response.send_message(
+                "❌ 指定されたIDの投票アンケートが見つかりません。", ephemeral=True
+            )
+            return
+
+        is_creator = poll["creator_id"] == interaction.user.id
+        is_admin = interaction.user.guild_permissions.manage_guild
+        if not is_creator and not is_admin:
+            await interaction.response.send_message(
+                "❌ 編集できるのは作成者またはサーバー管理者のみです。", ephemeral=True
+            )
+            return
+
+        if not poll["is_active"]:
+            await interaction.response.send_message(
+                "⚠️ 終了したアンケートは編集できません。", ephemeral=True
+            )
+            return
+
+        await interaction.response.send_modal(
+            PollEditModal(poll_id=message_id, poll_row=poll, bot_instance=self.bot)
+        )
+
     # ── /poll_panel ──────────────────────────────────────────
 
     @app_commands.command(
@@ -935,6 +1183,39 @@ class PollCog(commands.Cog):
 
         await interaction.response.send_message(
             "✅ アンケートを締め切りました。", ephemeral=True
+        )
+
+    # ── /edit_survey ─────────────────────────────────────────
+
+    @app_commands.command(
+        name="edit_survey",
+        description="アンケートのタイトル・質問を編集します（作成者またはサーバー管理者のみ）",
+    )
+    @app_commands.describe(message_id="編集するアンケートメッセージのID")
+    async def edit_survey(self, interaction: discord.Interaction, message_id: str):
+        survey = await db.get_survey(message_id)
+        if not survey:
+            await interaction.response.send_message(
+                "❌ 指定されたIDのアンケートが見つかりません。", ephemeral=True
+            )
+            return
+
+        is_creator = survey["creator_id"] == interaction.user.id
+        is_admin = interaction.user.guild_permissions.manage_guild
+        if not is_creator and not is_admin:
+            await interaction.response.send_message(
+                "❌ 編集できるのは作成者またはサーバー管理者のみです。", ephemeral=True
+            )
+            return
+
+        if not survey["is_active"]:
+            await interaction.response.send_message(
+                "⚠️ 終了したアンケートは編集できません。", ephemeral=True
+            )
+            return
+
+        await interaction.response.send_modal(
+            SurveyEditModal(survey_id=message_id, survey_row=survey, bot_instance=self.bot)
         )
 
     # ── /survey_results ──────────────────────────────────────

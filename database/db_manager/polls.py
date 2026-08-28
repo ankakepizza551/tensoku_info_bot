@@ -16,6 +16,7 @@ __all__ = [
     "clear_poll_votes",
     "get_expired_polls",
     "close_poll",
+    "update_poll",
 ]
 
 
@@ -135,4 +136,28 @@ async def close_poll(poll_id: str) -> None:
     """投票アンケートを締め切る"""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("UPDATE polls SET is_active = 0 WHERE poll_id = ?", (poll_id,))
+        await db.commit()
+
+async def update_poll(
+    poll_id: str,
+    question: str,
+    options: list,
+    allow_multiple: bool,
+    is_anonymous: bool,
+    deadline: str | None,
+) -> None:
+    """投票アンケートの内容を更新する（選択肢の数を変える場合は既存投票がないことを呼び出し側で確認すること）"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """UPDATE polls SET question = ?, options = ?, allow_multiple = ?,
+               is_anonymous = ?, deadline = ? WHERE poll_id = ?""",
+            (
+                question,
+                json.dumps(options, ensure_ascii=False),
+                int(allow_multiple),
+                int(is_anonymous),
+                deadline,
+                poll_id,
+            ),
+        )
         await db.commit()
