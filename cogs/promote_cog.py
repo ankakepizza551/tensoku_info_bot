@@ -11,15 +11,25 @@ logger = logging.getLogger("TensokuMatchBot")
 
 PROMOTE_TWEET_TEXT = (
     "東方非想天則の対戦サーバー、参加者募集中！⚔️\n"
-    "戦績管理・レーティング・対戦マッチング機能つきで気軽に非想天則が遊べます。\n\n"
     "#天則コソ練広場 #th123"
 )
+
+# Discordのボタン(link component)のurlは512文字までという制約があるため、
+# 日本語や絵文字を含む文章をURLエンコードした結果が超過しないよう自動で切り詰める。
+_DISCORD_BUTTON_URL_MAX_LENGTH = 512
 
 
 def _build_intent_url(invite_url: str) -> str:
     """X(Twitter)投稿画面をあらかじめ入力済みの状態で開くURLを組み立てる。"""
-    params = {"text": PROMOTE_TWEET_TEXT, "url": invite_url}
-    return f"https://twitter.com/intent/tweet?{urllib.parse.urlencode(params, quote_via=urllib.parse.quote)}"
+    text = PROMOTE_TWEET_TEXT
+    while text:
+        params = {"text": text, "url": invite_url}
+        url = f"https://twitter.com/intent/tweet?{urllib.parse.urlencode(params, quote_via=urllib.parse.quote)}"
+        if len(url) <= _DISCORD_BUTTON_URL_MAX_LENGTH:
+            return url
+        text = text[:-1]
+    # 招待リンク自体が長すぎてtextなしでも収まらない場合のフォールバック
+    return f"https://twitter.com/intent/tweet?{urllib.parse.urlencode({'url': invite_url}, quote_via=urllib.parse.quote)}"
 
 
 class PromoteCog(commands.Cog):
