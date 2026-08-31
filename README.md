@@ -192,6 +192,16 @@ Discord で使えるテキスト装飾・見出し・引用・画像埋め込み
 
 ---
 
+### 📣 サーバー宣伝
+
+#### X(Twitter)で宣伝 (`/promote`)
+サーバーをX（旧Twitter）で宣伝できるボタンを表示します。
+- **コマンド**: `/promote`
+- ボタンを押すと、固定の宣伝文＋サーバー招待リンクが入力された状態でXの投稿画面（Web Intent）が開き、内容を確認してそのままポストできます。Botのアカウントで投稿されることはありません。
+- 事前に `.env` の `SERVER_INVITE_URL` にサーバーの招待リンクを設定しておく必要があります（未設定の場合はエラーメッセージが表示されます）。
+
+---
+
 ## 🛠️ 管理者（オーナー）専用コマンド
 
 プレフィックスコマンド（デフォルト `!`）で実行する、Botのオーナー専用コマンドです。
@@ -223,6 +233,7 @@ DISCORD_TOKEN=ここにDiscord_Botのトークンを記入
 BOT_PREFIX=!
 DB_PATH=data/tensoku_stats.db
 LETTER_ADMIN_CHANNEL_ID=匿名お便りの送信先チャンネルID（数字）
+SERVER_INVITE_URL=https://discord.gg/xxxxxxxx （/promote で使うサーバー招待リンク）
 ```
 
 ### 4. 起動
@@ -242,6 +253,7 @@ tensoku_info_bot/
 │   ├── letter_cog.py   # 匿名お便り (/tegami, /tegami_check)
 │   ├── poll_cog.py     # アンケート・投票 (/poll, /close_poll, /survey, /close_survey, /survey_results)
 │   ├── post_cog.py     # 投稿補助・文字装飾 (/post, /forum_post, /embed_builder, /format_help)
+│   ├── promote_cog.py  # サーバー宣伝 (/promote)
 │   ├── recruit_cog.py  # 対戦募集・マッチング自動化 (/recruit)
 │   ├── report_cog.py   # 戦績の登録と削除 (/report, /delete_match)
 │   └── stats_cog.py    # スタッツとランキング表示 (/stats, /leaderboard)
