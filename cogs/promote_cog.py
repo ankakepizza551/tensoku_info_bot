@@ -12,7 +12,7 @@ logger = logging.getLogger("TensokuMatchBot")
 PROMOTE_TWEET_TEXT = (
     "東方非想天則の対戦サーバー、参加者募集中！⚔️\n"
     "戦績管理・レーティング・対戦マッチング機能つきで気軽に非想天則が遊べます。\n\n"
-    "#東方非想天則 #東方Project"
+    "#天則コソ練広場 #th123"
 )
 
 
