@@ -19,6 +19,7 @@ def _parse_channel_id(env_key: str) -> int:
         return 0
 
 LETTER_ADMIN_CHANNEL_ID = _parse_channel_id("LETTER_ADMIN_CHANNEL_ID")
+SERVER_INVITE_URL = os.getenv("SERVER_INVITE_URL", "").strip()
 
 # Railway環境では必ず /app/data のVolumeにDBを置く。
 # Volumeが未マウントのまま起動するとコンテナの一時ディスクに空DBが作られ、
