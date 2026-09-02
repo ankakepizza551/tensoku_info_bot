@@ -18,14 +18,19 @@ logger = logging.getLogger("TensokuMatchBot")
 DEFAULT_REPLY_CHANNEL_ID = 1526810415852687420
 
 
-def _build_letter_embed(letter_id: int, title: str, body: str) -> discord.Embed:
+def _build_letter_embed(
+    letter_id: int, title: str, body: str, is_anonymous: bool, sender_display: str | None = None
+) -> discord.Embed:
     embed = discord.Embed(
         title=f"📨 お便り No.{letter_id}",
         color=discord.Color.from_rgb(149, 117, 205),
     )
     embed.add_field(name="件名", value=title, inline=False)
     embed.add_field(name="内容", value=body, inline=False)
-    embed.set_footer(text="送信者：匿名　　/tegami_check で送信者を確認できます")
+    if is_anonymous:
+        embed.set_footer(text="送信者：匿名　　/tegami_check で送信者を確認できます")
+    else:
+        embed.set_footer(text=f"送信者：{sender_display or '不明'}")
     return embed
 
 
@@ -39,7 +44,7 @@ def _build_hidden_embed(letter_id: int) -> discord.Embed:
     return embed
 
 
-class LetterModal(discord.ui.Modal, title="📨 匿名お便りを送る"):
+class LetterModal(discord.ui.Modal, title="📨 お便りを送る"):
     letter_title = discord.ui.TextInput(
         label="タイトル",
         placeholder="件名を入力してください",
@@ -48,11 +53,19 @@ class LetterModal(discord.ui.Modal, title="📨 匿名お便りを送る"):
     )
     letter_body = discord.ui.TextInput(
         label="本文",
-        placeholder="内容を自由に書いてください（誰が送ったかは表示されません）",
+        placeholder="内容を自由に書いてください",
         style=discord.TextStyle.paragraph,
         max_length=1000,
         required=True,
     )
+
+    def __init__(self, anonymous: bool = True):
+        super().__init__()
+        self.anonymous = anonymous
+        if anonymous:
+            self.letter_body.placeholder = "内容を自由に書いてください（誰が送ったかは表示されません）"
+        else:
+            self.letter_body.placeholder = "内容を自由に書いてください（あなたの名前が表示されます）"
 
     async def on_submit(self, interaction: discord.Interaction):
         admin_channel_id = config.LETTER_ADMIN_CHANNEL_ID
@@ -75,18 +88,22 @@ class LetterModal(discord.ui.Modal, title="📨 匿名お便りを送る"):
             sender_id=interaction.user.id,
             title=self.letter_title.value,
             body=self.letter_body.value,
+            is_anonymous=self.anonymous,
         )
 
-        embed = _build_letter_embed(letter_id, self.letter_title.value, self.letter_body.value)
+        sender_display = None if self.anonymous else interaction.user.display_name
+        embed = _build_letter_embed(
+            letter_id, self.letter_title.value, self.letter_body.value, self.anonymous, sender_display
+        )
 
         message = await admin_channel.send(embed=embed)
         await set_letter_admin_message(letter_id, message.id)
-        logger.info(f"匿名お便り投稿 letter_id={letter_id} sender={interaction.user.id}")
-
-        await interaction.response.send_message(
-            f"✅ お便りを送信しました！",
-            ephemeral=True,
+        logger.info(
+            f"お便り投稿 letter_id={letter_id} sender={interaction.user.id} anonymous={self.anonymous}"
         )
+
+        confirm_text = "✅ お便りを匿名で送信しました！" if self.anonymous else "✅ お便りを名前付きで送信しました！"
+        await interaction.response.send_message(confirm_text, ephemeral=True)
 
     async def on_error(self, interaction: discord.Interaction, error: Exception):
         logger.error(f"LetterModal エラー: {error}")
@@ -212,16 +229,28 @@ async def edit_letter_reply(interaction: discord.Interaction, message: discord.M
 class LetterPanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
-        btn = discord.ui.Button(
-            label="📨 匿名お便りを送る",
-            style=discord.ButtonStyle.primary,
-            custom_id="letter_panel",
-        )
-        btn.callback = self._btn_callback
-        self.add_item(btn)
 
-    async def _btn_callback(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(LetterModal())
+        anonymous_btn = discord.ui.Button(
+            label="📨 匿名で送る",
+            style=discord.ButtonStyle.primary,
+            custom_id="letter_panel_anonymous",
+        )
+        anonymous_btn.callback = self._anonymous_callback
+        self.add_item(anonymous_btn)
+
+        named_btn = discord.ui.Button(
+            label="🙋 名前を出して送る",
+            style=discord.ButtonStyle.secondary,
+            custom_id="letter_panel_named",
+        )
+        named_btn.callback = self._named_callback
+        self.add_item(named_btn)
+
+    async def _anonymous_callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(LetterModal(anonymous=True))
+
+    async def _named_callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(LetterModal(anonymous=False))
 
 
 class LetterCog(commands.Cog):
@@ -237,18 +266,20 @@ class LetterCog(commands.Cog):
             edit_letter_reply.name, type=discord.AppCommandType.message
         )
 
-    @app_commands.command(name="tegami", description="匿名でお便りを送ります（送信者名は表示されません）")
-    async def tegami(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(LetterModal())
+    @app_commands.command(name="tegami", description="お便りを送ります（匿名/名前表示を選べます）")
+    @app_commands.describe(anonymous="匿名で送信するか（既定：匿名）")
+    async def tegami(self, interaction: discord.Interaction, anonymous: bool = True):
+        await interaction.response.send_modal(LetterModal(anonymous=anonymous))
 
-    @app_commands.command(name="setup_letter_panel", description="匿名お便りボタンをこのチャンネルに設置します（管理者用）")
+    @app_commands.command(name="setup_letter_panel", description="お便りボタンをこのチャンネルに設置します（管理者用）")
     @app_commands.default_permissions(manage_guild=True)
     async def setup_letter_panel(self, interaction: discord.Interaction):
         embed = discord.Embed(
-            title="📨 匿名お便り",
+            title="📨 お便り",
             description=(
                 "下のボタンを押すとお便り送信フォームが開きます。\n"
-                "送信者名は管理者にも **表示されません**（完全匿名）。"
+                "「📨 匿名で送る」を選ぶと送信者名は管理者にも **表示されません**（完全匿名）。\n"
+                "「🙋 名前を出して送る」を選ぶとあなたの名前が表示された状態で届きます。"
             ),
             color=discord.Color.from_rgb(149, 117, 205),
         )
@@ -419,7 +450,14 @@ class LetterCog(commands.Cog):
         if hidden:
             embed = _build_hidden_embed(letter_id)
         else:
-            embed = _build_letter_embed(letter_id, letter["title"], letter["body"])
+            is_anonymous = bool(letter["is_anonymous"])
+            sender_display = None
+            if not is_anonymous:
+                member = interaction.guild.get_member(letter["sender_id"])
+                sender_display = member.display_name if member else f"ID:{letter['sender_id']}"
+            embed = _build_letter_embed(
+                letter_id, letter["title"], letter["body"], is_anonymous, sender_display
+            )
 
         await message.edit(embed=embed)
 
