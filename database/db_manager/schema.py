@@ -232,6 +232,9 @@ async def init_db():
         if "is_hidden" not in letter_columns:
             await db.execute("ALTER TABLE letters ADD COLUMN is_hidden INTEGER DEFAULT 0")
             await db.commit()
+        if "is_anonymous" not in letter_columns:
+            await db.execute("ALTER TABLE letters ADD COLUMN is_anonymous INTEGER DEFAULT 1")
+            await db.commit()
 
         # 投票アンケートテーブル
         await db.execute("""

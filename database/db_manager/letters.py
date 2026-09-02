@@ -11,12 +11,12 @@ __all__ = [
 ]
 
 
-async def add_letter(sender_id: int, title: str, body: str) -> int:
-    """匿名お便りをDBに保存し、letter_id を返す"""
+async def add_letter(sender_id: int, title: str, body: str, is_anonymous: bool = True) -> int:
+    """お便りをDBに保存し、letter_id を返す"""
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
-            "INSERT INTO letters (sender_id, title, body) VALUES (?, ?, ?)",
-            (sender_id, title, body)
+            "INSERT INTO letters (sender_id, title, body, is_anonymous) VALUES (?, ?, ?, ?)",
+            (sender_id, title, body, int(is_anonymous))
         )
         await db.commit()
         return cursor.lastrowid
