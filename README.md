@@ -5,7 +5,7 @@
 
 **ユーザーの操作は、チャンネルに設置された「パネル」のボタンが中心です。** スラッシュコマンドは、ボタンと同じ操作をコマンドで呼び出す手段、または管理者が設定・運営するための手段として用意されています。
 
-紹介ページ: https://claude.ai/artifact/E6nRhYTprgqme5EavKVCSP
+紹介ページ: https://kosoren-site.kentatoonimusya.workers.dev/
 
 ---
 
