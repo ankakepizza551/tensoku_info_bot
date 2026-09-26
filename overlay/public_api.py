@@ -62,5 +62,30 @@ async def handle_stats(request: web.Request) -> web.Response:
     return web.json_response(body, headers=_cors_headers(request))
 
 
+async def handle_events(request: web.Request) -> web.Response:
+    """公開カレンダー用の予定一覧。PUBLIC_GUILD_ID を設定すると、そのサーバーの予定だけを返す"""
+    guild_id = int(os.getenv("PUBLIC_GUILD_ID", "0") or 0) or None
+    try:
+        events = await db_manager.get_public_events(guild_id)
+    except Exception as e:
+        logger.error(f"公開API events 取得失敗: {e}")
+        return web.json_response({"error": "取得に失敗しました。"}, status=500, headers=_cors_headers(request))
+
+    body = [
+        {
+            "id": e["event_id"],
+            "date": e["date"],
+            "name": e["name"],
+            "type": e["type"],
+            "time": e["time"] or "",
+            "location": e["location"] or "",
+            "url": e["url"] or "",
+        }
+        for e in events
+    ]
+    return web.json_response(body, headers=_cors_headers(request))
+
+
 def add_routes(app: web.Application) -> None:
     app.router.add_get("/api/public/stats", handle_stats)
+    app.router.add_get("/api/public/events", handle_events)

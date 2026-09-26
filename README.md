@@ -263,6 +263,7 @@
 - **URL**: `GET https://<公開ドメイン>/api/public/stats`
 - **返す内容**: 有頂天の塔のランク別人数、メインキャラごとの登録人数。ユーザー名・ID・個別のレートは含みません。
 - **キャッシュ**: 60秒
+- **カレンダー用**: `GET /api/public/events` は、カレンダーの予定一覧（日付・大会名・種別・時間・場所・URL）を返します。Webのカレンダーはこの予定を読んで表示します。`PUBLIC_GUILD_ID` を設定すると、そのサーバーの予定だけに絞れます。
 - **CORS**: 既定は全許可。制限する場合は `PUBLIC_API_ORIGINS=https://kosoren-site.xxx.workers.dev`（カンマ区切り）を設定します。
 
 ---
