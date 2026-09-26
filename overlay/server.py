@@ -10,6 +10,7 @@ import os
 from aiohttp import web
 
 from database import db_manager
+from overlay import public_api
 
 logger = logging.getLogger("TensokuMatchBot")
 
@@ -175,6 +176,7 @@ def build_app() -> web.Application:
     app = web.Application()
     app.router.add_get("/territory", handle_page)
     app.router.add_get("/territory/api", handle_api)
+    public_api.add_routes(app)
     return app
 
 

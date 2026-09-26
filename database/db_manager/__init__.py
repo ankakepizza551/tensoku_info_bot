@@ -13,3 +13,4 @@ from .main_characters import *
 from .raid_battle import *
 from .thread_index import *
 from .reminders import *
+from .public_stats import *
