@@ -249,7 +249,7 @@
 
 | 機能 | 内容 |
 |---|---|
-| イベントカレンダー | 月表示のカレンダー。ボタンで前月・今月・翌月を切り替え。パネルの「🟢 オン大会を追加」「🔴 オフ大会を追加」「🗑️ イベントを削除」から、日付・大会名・開始時間・場所・詳細URLを登録・削除できます。コマンド: `/add_event` `/remove_event`。管理者用: `/calendar_setup` `/setup_event_panel` |
+| イベントカレンダー | 月表示のカレンダー。ボタンで前月・今月・翌月を切り替え。パネルの「🟢 オン大会を追加」「🔴 オフ大会を追加」「🗑️ イベントを削除」から、日付・大会名・開始時間・場所・詳細URLを登録・削除できます。コマンド: `/add_event` `/remove_event`。**予定の追加・削除は、サーバー管理権限を持つ人だけ**が行えます（`CALENDAR_EDITOR_ROLE_ID` でロールを追加可）。管理者用: `/calendar_setup` `/setup_event_panel` |
 | イベントリマインダー | スレッド内で `/set_reminder` を使うと、指定した日時に通知します。`/list_reminders` で一覧、`/cancel_reminder` で削除 |
 | スレッド一覧ボード | `/setup_thread_index` で、指定チャンネルのアクティブなスレッド一覧を自動更新するボードを設置。`/remove_thread_index` で削除 |
 | サーバー宣伝 | `/promote` でX（旧Twitter）に投稿するためのボタンを表示。投稿はユーザー自身のXから行われます（`SERVER_INVITE_URL` の設定が必要） |
@@ -347,6 +347,7 @@ TERRITORY_OVERLAY_TOKEN=（任意）配信オーバーレイ用のアクセス�
 | `DB_PATH` | SQLiteのパス。未設定時は `data/tensoku_stats.db` |
 | `LETTER_ADMIN_CHANNEL_ID` | お便りと確認ログの送信先 |
 | `SERVER_INVITE_URL` | `/promote` で使う招待リンク |
+| `CALENDAR_EDITOR_ROLE_ID` | （任意）カレンダーの予定を編集できる追加ロールのID。未設定ならサーバー管理権限を持つ人だけ |
 | `TERRITORY_OVERLAY_TOKEN` | 配信オーバーレイのアクセス制限（任意） |
 | `PORT` | オーバーレイのWebサーバーのポート（未設定時は `8080`） |
 

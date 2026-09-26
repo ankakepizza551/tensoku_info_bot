@@ -6,12 +6,30 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+import config
 import database.db_manager as db
 
 logger = logging.getLogger("TensokuMatchBot")
 
 JST = datetime.timezone(datetime.timedelta(hours=9))
 WEEKDAYS_JP = ["月", "火", "水", "木", "金", "土", "日"]
+
+NO_EDIT_PERMISSION_MESSAGE = "❌ 予定を編集できるのは運営メンバーだけです。"
+
+
+def _can_edit_calendar(interaction: discord.Interaction) -> bool:
+    """サーバー管理権限を持つ人、または CALENDAR_EDITOR_ROLE_ID のロールを持つ人だけ編集できる"""
+    member = interaction.user
+    if not isinstance(member, discord.Member):
+        return False
+    if member.guild_permissions.manage_guild:
+        return True
+    role_id = config.CALENDAR_EDITOR_ROLE_ID
+    return bool(role_id) and any(r.id == role_id for r in member.roles)
+
+
+async def _deny_calendar_edit(interaction: discord.Interaction) -> None:
+    await interaction.response.send_message(NO_EDIT_PERMISSION_MESSAGE, ephemeral=True)
 
 
 def build_calendar_embed(year: int, month: int, events: list) -> discord.Embed:
@@ -267,12 +285,21 @@ class CalendarManagePanelView(discord.ui.View):
         self.add_item(remove)
 
     async def _add_online(self, interaction: discord.Interaction):
+        if not _can_edit_calendar(interaction):
+            await _deny_calendar_edit(interaction)
+            return
         await interaction.response.send_modal(AddEventModal("online"))
 
     async def _add_offline(self, interaction: discord.Interaction):
+        if not _can_edit_calendar(interaction):
+            await _deny_calendar_edit(interaction)
+            return
         await interaction.response.send_modal(AddEventModal("offline"))
 
     async def _remove(self, interaction: discord.Interaction):
+        if not _can_edit_calendar(interaction):
+            await _deny_calendar_edit(interaction)
+            return
         events = await db.get_events(interaction.guild_id)
         if not events:
             await interaction.response.send_message(
@@ -388,6 +415,10 @@ class CalendarCog(commands.Cog):
         location: Optional[str] = None,
         url: Optional[str] = None,
     ):
+        if not _can_edit_calendar(interaction):
+            await _deny_calendar_edit(interaction)
+            return
+
         parsed_date = None
         for fmt in ("%Y-%m-%d", "%Y/%m/%d"):
             try:
@@ -428,6 +459,9 @@ class CalendarCog(commands.Cog):
     @app_commands.command(name="remove_event", description="カレンダーからイベントを削除します")
     @app_commands.describe(event_id="削除するイベント（一覧から選択）")
     async def remove_event(self, interaction: discord.Interaction, event_id: int):
+        if not _can_edit_calendar(interaction):
+            await _deny_calendar_edit(interaction)
+            return
         success = await db.delete_event(event_id, interaction.guild_id)
         if not success:
             await interaction.response.send_message(
