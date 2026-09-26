@@ -21,6 +21,10 @@ def _parse_channel_id(env_key: str) -> int:
 LETTER_ADMIN_CHANNEL_ID = _parse_channel_id("LETTER_ADMIN_CHANNEL_ID")
 # カレンダーの予定を編集できる追加ロール（未設定なら、サーバー管理権限を持つ人だけ）
 CALENDAR_EDITOR_ROLE_ID = _parse_channel_id("CALENDAR_EDITOR_ROLE_ID")
+# カレンダー下に表示する「Web版を開く」ボタンのURL（空にするとボタンを出さない）
+CALENDAR_WEB_URL = os.getenv(
+    "CALENDAR_WEB_URL", "https://kosoren-calendar.kentatoonimusya.workers.dev/"
+).strip()
 SERVER_INVITE_URL =os.getenv("SERVER_INVITE_URL", "").strip()
 
 # Railway環境では必ず /app/data のVolumeにDBを置く。

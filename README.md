@@ -349,6 +349,7 @@ TERRITORY_OVERLAY_TOKEN=（任意）配信オーバーレイ用のアクセス�
 | `LETTER_ADMIN_CHANNEL_ID` | お便りと確認ログの送信先 |
 | `SERVER_INVITE_URL` | `/promote` で使う招待リンク |
 | `CALENDAR_EDITOR_ROLE_ID` | （任意）カレンダーの予定を編集できる追加ロールのID。未設定ならサーバー管理権限を持つ人だけ |
+| `CALENDAR_WEB_URL` | カレンダーの下に出す「Web版を開く」ボタンのURL。未設定ならWeb版カレンダーのURL、空にするとボタンなし |
 | `TERRITORY_OVERLAY_TOKEN` | 配信オーバーレイのアクセス制限（任意） |
 | `PORT` | オーバーレイのWebサーバーのポート（未設定時は `8080`） |
 

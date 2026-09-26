@@ -93,6 +93,12 @@ class CalendarView(discord.ui.View):
         self.add_item(prev_btn)
         self.add_item(today_btn)
         self.add_item(next_btn)
+        if config.CALENDAR_WEB_URL:
+            self.add_item(discord.ui.Button(
+                label="Web版を開く",
+                style=discord.ButtonStyle.link,
+                url=config.CALENDAR_WEB_URL,
+            ))
 
     async def _refresh(self, interaction: discord.Interaction, year: int, month: int):
         self.year = year
