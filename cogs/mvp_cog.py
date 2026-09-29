@@ -46,9 +46,35 @@ def build_mvp_embed(mvp: dict) -> discord.Embed:
     return embed
 
 
+async def _send_mvp(interaction: discord.Interaction, month: str):
+    await interaction.response.defer(ephemeral=True)
+    mvp = await db_manager.get_monthly_mvp(month)
+    await interaction.followup.send(embed=build_mvp_embed(mvp), ephemeral=True)
+
+
+class MvpPanelView(discord.ui.View):
+    """月間MVPの確認ボタン（常設パネル・月初の自動投稿に付ける）"""
+
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="今月の途中経過", emoji="📈", style=discord.ButtonStyle.primary, custom_id="mvp_panel_current")
+    async def current(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await _send_mvp(interaction, datetime.datetime.now(JST).strftime("%Y-%m"))
+
+    @discord.ui.button(label="先月の結果", emoji="🌟", style=discord.ButtonStyle.secondary, custom_id="mvp_panel_previous")
+    async def previous(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await _send_mvp(interaction, _previous_month(datetime.datetime.now(JST)))
+
+
 class MvpCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        """Bot起動・再接続時に常設パネルのViewを再登録する"""
+        self.bot.add_view(MvpPanelView())
 
     async def cog_load(self):
         if not self._post_monthly_mvp.is_running():
@@ -69,7 +95,7 @@ class MvpCog(commands.Cog):
                 continue
             try:
                 mvp = await db_manager.get_monthly_mvp(prev)
-                await channel.send(embed=build_mvp_embed(mvp))
+                await channel.send(embed=build_mvp_embed(mvp), view=MvpPanelView())
             except discord.HTTPException as e:
                 logger.warning(f"MVP投稿失敗 (guild={setting['guild_id']}): {e}")
                 continue
@@ -111,6 +137,22 @@ class MvpCog(commands.Cog):
             f"✅ 毎月1日に前月の月間MVPを {channel.mention} へ投稿します。", ephemeral=True
         )
         logger.info(f"mvp_setup: guild={interaction.guild_id} channel={channel.id}")
+
+    @app_commands.command(
+        name="mvp_panel",
+        description="月間MVPの確認ボタンのパネルをこのチャンネルに設置します（管理者のみ）",
+    )
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.guild_only()
+    async def mvp_panel(self, interaction: discord.Interaction):
+        embed = discord.Embed(
+            title="🌟 月間MVP",
+            description="対戦数・勝利数・対戦相手数の上位3名を確認できます。\nボタンを押すと、あなただけに表示されます。",
+            color=discord.Color.from_rgb(241, 196, 15),
+        )
+        await interaction.channel.send(embed=embed, view=MvpPanelView())
+        await interaction.response.send_message("✅ パネルを設置しました。", ephemeral=True)
+        logger.info(f"mvp_panel: guild={interaction.guild_id} channel={interaction.channel_id}")
 
 
 async def setup(bot: commands.Bot):
