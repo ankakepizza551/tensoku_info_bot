@@ -3,6 +3,7 @@
 個人を特定できる情報（ユーザー名・ID・個別のレート）は返さず、集計値だけを返す。
 サイト(Cloudflare Pages)からブラウザで直接取得できるよう、CORSを許可する。
 """
+import datetime
 import logging
 import os
 
@@ -12,6 +13,8 @@ from database import db_manager
 from rating_ranks import RANK_TIERS, get_rank
 
 logger = logging.getLogger("TensokuMatchBot")
+
+JST = datetime.timezone(datetime.timedelta(hours=9))
 
 # 許可するオリジン（カンマ区切り）。未設定なら集計値のみなので全許可。
 _ALLOWED_ORIGINS = [
@@ -86,6 +89,26 @@ async def handle_events(request: web.Request) -> web.Response:
     return web.json_response(body, headers=_cors_headers(request))
 
 
+async def handle_mvp(request: web.Request) -> web.Response:
+    """月間MVP。?month=YYYY-MM（JST）。省略時は今月。ユーザーIDは返さず、表示名と値だけを返す"""
+    month = request.query.get("month") or datetime.datetime.now(JST).strftime("%Y-%m")
+    try:
+        month = datetime.datetime.strptime(month, "%Y-%m").strftime("%Y-%m")
+    except ValueError:
+        return web.json_response({"error": "month は YYYY-MM で指定してください。"}, status=400, headers=_cors_headers(request))
+    try:
+        mvp = await db_manager.get_monthly_mvp(month)
+    except Exception as e:
+        logger.error(f"公開API mvp 取得失敗: {e}")
+        return web.json_response({"error": "取得に失敗しました。"}, status=500, headers=_cors_headers(request))
+
+    body = {"month": month, "daily_pair_cap": db_manager.MVP_DAILY_PAIR_CAP}
+    for key in ("matches", "wins", "opponents"):
+        body[key] = [{"rank": e["rank"], "name": e["username"], "value": e["value"]} for e in mvp[key]]
+    return web.json_response(body, headers=_cors_headers(request))
+
+
 def add_routes(app: web.Application) -> None:
+    app.router.add_get("/api/public/mvp", handle_mvp)
     app.router.add_get("/api/public/stats", handle_stats)
     app.router.add_get("/api/public/events", handle_events)

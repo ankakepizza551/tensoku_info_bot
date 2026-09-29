@@ -42,6 +42,7 @@
 | 対戦募集（フォーラム） | パネルのボタン | `/recruit_register` |
 | 対戦募集（メッセージ式） | コマンド → ボタン | `/recruit` |
 | 戦績・スタッツ | コマンド | `/report` `/stats` `/leaderboard` |
+| 月間MVP | 毎月1日に自動投稿 | `/mvp` `/mvp_setup` |
 | レイドバトル | パネルのボタン | （管理者用のみ） |
 | 陣取り戦 | パネルのボタン | `/territory_register` `/territory_report` ほか |
 | メインキャラ | パネルのボタン | `/main_char` `/main_char_list` |
