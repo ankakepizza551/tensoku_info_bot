@@ -207,9 +207,12 @@ class RaidBattleCog(commands.Cog):
 
     async def _handle_register(self, interaction: discord.Interaction, as_advanced: bool):
         guild = interaction.guild
+        # ロールの付け替えとボード更新で応答期限（3秒）を超えることがあるため、先に応答を保留する
+        await interaction.response.defer(ephemeral=True)
+
         settings = await db_manager.get_raid_battle_settings(guild.id)
         if not settings or not settings.get("beginner_role_id") or not settings.get("advanced_role_id"):
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ このサーバーではレイドバトルが未設定です。管理者に `/setup_raid_battle` の実行を依頼してください。",
                 ephemeral=True,
             )
@@ -218,7 +221,7 @@ class RaidBattleCog(commands.Cog):
         beginner_role = await _resolve_role(guild, settings["beginner_role_id"])
         advanced_role = await _resolve_role(guild, settings["advanced_role_id"])
         if beginner_role is None or advanced_role is None:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ ロールが見つかりません。管理者にご連絡ください。", ephemeral=True
             )
             return
@@ -232,7 +235,7 @@ class RaidBattleCog(commands.Cog):
                     await member.add_roles(advanced_role, reason="レイドバトル 上級者登録")
                 await db_manager.ensure_raid_advanced_status(member.id, guild.id)
                 await _sync_status_board(guild)
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     f"✅ {advanced_role.mention} として登録しました（デフォルトは「対応可能」です）。",
                     ephemeral=True,
                 )
@@ -242,11 +245,11 @@ class RaidBattleCog(commands.Cog):
                     await _sync_status_board(guild)
                 if beginner_role not in member.roles:
                     await member.add_roles(beginner_role, reason="レイドバトル 初級者登録")
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     f"✅ {beginner_role.mention} として登録しました。", ephemeral=True
                 )
         except discord.Forbidden:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ ロールを付与する権限がありません。管理者にご連絡ください。", ephemeral=True
             )
             return

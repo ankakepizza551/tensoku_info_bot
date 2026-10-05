@@ -20,6 +20,7 @@ __all__ = [
     "init_territory_grid",
     "get_territory_grid",
     "set_territory_grid_cell",
+    "revert_territory_match_cells",
     "save_territory_settings",
     "get_territory_settings",
     "save_territory_team_role",
@@ -283,8 +284,22 @@ async def get_territory_grid(guild_id: int) -> list:
             rows = await cursor.fetchall()
         return [dict(r) for r in rows]
 
-async def set_territory_grid_cell(guild_id: int, cell_index: int, team_index: int) -> None:
+async def set_territory_grid_cell(guild_id: int, cell_index: int, team_index: int, match_id: int = None) -> None:
+    """マスの所有チームを更新する。match_id を指定すると、塗り替え前の所有チームを記録しておき、
+    その対戦結果が削除されたときに元へ戻せるようにする"""
     async with aiosqlite.connect(DB_PATH) as db:
+        if match_id is not None:
+            async with db.execute(
+                "SELECT team_index FROM territory_grid WHERE guild_id = ? AND cell_index = ?",
+                (guild_id, cell_index),
+            ) as cursor:
+                row = await cursor.fetchone()
+            if row is not None and row[0] != team_index:
+                await db.execute(
+                    """INSERT INTO territory_cell_changes (guild_id, match_id, cell_index, prev_team, new_team)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (guild_id, match_id, cell_index, row[0], team_index),
+                )
         await db.execute(
             """INSERT INTO territory_grid (guild_id, cell_index, team_index)
                VALUES (?, ?, ?)
@@ -292,6 +307,40 @@ async def set_territory_grid_cell(guild_id: int, cell_index: int, team_index: in
             (guild_id, cell_index, team_index),
         )
         await db.commit()
+
+async def revert_territory_match_cells(guild_id: int, match_id: int) -> tuple[int, int]:
+    """指定した対戦で塗り替えたマスを元の所有チームに戻す。(戻したマス数, 戻せなかったマス数) を返す。
+    その後ほかの対戦で塗り替えられているマスは、そちらを優先して戻さない"""
+    restored = 0
+    skipped = 0
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            """SELECT cell_index, prev_team, new_team FROM territory_cell_changes
+               WHERE guild_id = ? AND match_id = ? ORDER BY change_id DESC""",
+            (guild_id, match_id),
+        ) as cursor:
+            changes = await cursor.fetchall()
+
+        for cell_index, prev_team, new_team in changes:
+            async with db.execute(
+                "SELECT team_index FROM territory_grid WHERE guild_id = ? AND cell_index = ?",
+                (guild_id, cell_index),
+            ) as cursor:
+                row = await cursor.fetchone()
+            if row is not None and row[0] == new_team:
+                await db.execute(
+                    "UPDATE territory_grid SET team_index = ? WHERE guild_id = ? AND cell_index = ?",
+                    (prev_team, guild_id, cell_index),
+                )
+                restored += 1
+            else:
+                skipped += 1
+
+        await db.execute(
+            "DELETE FROM territory_cell_changes WHERE guild_id = ? AND match_id = ?", (guild_id, match_id)
+        )
+        await db.commit()
+    return restored, skipped
 
 async def save_territory_settings(
     guild_id: int,
@@ -390,8 +439,10 @@ async def clear_territory_team_roles(guild_id: int) -> None:
         await db.commit()
 
 async def clear_territory_matches(guild_id: int) -> None:
+    """対戦履歴と、対戦ごとのマス塗り替え記録をまとめて削除する"""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("DELETE FROM territory_matches WHERE guild_id = ?", (guild_id,))
+        await db.execute("DELETE FROM territory_cell_changes WHERE guild_id = ?", (guild_id,))
         await db.commit()
 
 async def clear_territory_grid(guild_id: int) -> None:

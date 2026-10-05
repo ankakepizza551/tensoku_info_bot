@@ -28,6 +28,12 @@ def _auto_decorate(text: str) -> str:
     return "\n".join(result)
 
 
+def can_post_to_forum(member: discord.Member, forum: discord.ForumChannel) -> bool:
+    """本人がそのフォーラムに投稿できるか。Bot経由で、本人に権限のないフォーラムへ投稿させないために使う"""
+    perms = forum.permissions_for(member)
+    return perms.view_channel and perms.send_messages
+
+
 # ─────────────────────────────────────────────
 #  スレッド対応ユーティリティ
 # ─────────────────────────────────────────────
@@ -575,6 +581,11 @@ class PostCog(commands.Cog):
         color: str = "52,152,219",
     ):
         try:
+            if not can_post_to_forum(interaction.user, channel):
+                await interaction.response.send_message(
+                    f"❌ {channel.mention} に投稿する権限がありません。", ephemeral=True
+                )
+                return
             r, g, b = map(int, color.split(","))
             await interaction.response.send_modal(
                 ForumPostModal(channel=channel, color=discord.Color.from_rgb(r, g, b))

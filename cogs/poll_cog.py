@@ -1,4 +1,5 @@
 import datetime
+import io
 import json
 import logging
 from typing import Optional
@@ -12,6 +13,24 @@ import database.db_manager as db
 logger = logging.getLogger("TensokuMatchBot")
 
 JST = datetime.timezone(datetime.timedelta(hours=9))
+
+
+def _is_manager(interaction: discord.Interaction) -> bool:
+    """サーバー管理権限を持つか（DMなどサーバー外では常にFalse）"""
+    return isinstance(interaction.user, discord.Member) and interaction.user.guild_permissions.manage_guild
+
+
+async def _reject_if_cannot_post(interaction: discord.Interaction, channel) -> bool:
+    """channel オプションで別チャンネルを指定されたとき、本人が書き込めないチャンネルへBot経由で投稿させない"""
+    if channel is None or channel.id == interaction.channel_id:
+        return False
+    perms = channel.permissions_for(interaction.user)
+    if perms.view_channel and perms.send_messages:
+        return False
+    await interaction.response.send_message(
+        f"❌ {channel.mention} に投稿する権限がありません。", ephemeral=True
+    )
+    return True
 
 
 # ──────────────────────────────────────────────────────────────
@@ -53,6 +72,8 @@ def build_poll_embed(
         lines.append(line)
 
     description = "\n\n".join(lines) if lines else "選択肢がありません。"
+    if len(description) > 4096:
+        description = description[:4095] + "…"
     color = discord.Color.blue() if is_active else discord.Color.from_rgb(120, 120, 120)
     status = "🟢 投票受付中" if is_active else "🔴 終了"
     select_mode = "複数選択可" if allow_multiple else "単一選択"
@@ -116,7 +137,7 @@ class PollButton(discord.ui.Button):
         if deadline:
             now_str = datetime.datetime.now(JST).strftime("%Y-%m-%d %H:%M")
             if now_str >= deadline:
-                await db.close_poll(self.poll_id)
+                # 締め切り処理（表示更新・結果発表）は定期タスクに任せる
                 await interaction.response.send_message(
                     "⚠️ このアンケートの期限が過ぎています。", ephemeral=True
                 )
@@ -176,7 +197,7 @@ class PollCancelButton(discord.ui.Button):
         if deadline:
             now_str = datetime.datetime.now(JST).strftime("%Y-%m-%d %H:%M")
             if now_str >= deadline:
-                await db.close_poll(self.poll_id)
+                # 締め切り処理（表示更新・結果発表）は定期タスクに任せる
                 await interaction.response.send_message(
                     "⚠️ このアンケートの期限が過ぎています。", ephemeral=True
                 )
@@ -235,6 +256,17 @@ class SurveyAnswerModal(discord.ui.Modal):
             )
 
     async def on_submit(self, interaction: discord.Interaction):
+        # フォームを開いている間に締め切られた・別のフォームから回答済みになった場合は受け付けない
+        survey = await db.get_survey(self.survey_id)
+        if not survey or not survey["is_active"]:
+            await interaction.response.send_message(
+                "⚠️ このアンケートはすでに終了しています。", ephemeral=True
+            )
+            return
+        if await db.has_survey_responded(self.survey_id, interaction.user.id):
+            await interaction.response.send_message("⚠️ すでに回答済みです。", ephemeral=True)
+            return
+
         answers = [item.value for item in self.children]
         await db.add_survey_response(
             survey_id=self.survey_id,
@@ -596,6 +628,7 @@ class PollEditModal(discord.ui.Modal, title="投票アンケートを編集"):
         super().__init__()
         self.poll_id = poll_id
         self.old_options = json.loads(poll_row["options"])
+        self.was_anonymous = bool(poll_row["is_anonymous"])
         self.bot_instance = bot_instance
 
         self.question_field = discord.ui.TextInput(
@@ -661,6 +694,14 @@ class PollEditModal(discord.ui.Modal, title="投票アンケートを編集"):
 
         allow_multiple = _parse_bool(self.allow_multiple_field.value, default=True)
         anonymous = _parse_bool(self.anonymous_field.value, default=True)
+
+        if vote_rows and self.was_anonymous and not anonymous:
+            await interaction.response.send_message(
+                "❌ すでに匿名で投票されているため、記名式には変更できません。\n"
+                "（匿名のつもりで投票した人の名前が表示されてしまうため）",
+                ephemeral=True,
+            )
+            return
 
         deadline_str: str | None = None
         deadline_input = self.deadline_field.value.strip()
@@ -808,10 +849,15 @@ class PollCog(commands.Cog):
     @tasks.loop(minutes=1)
     async def _check_expired_polls(self):
         """期限切れの投票アンケートを自動締め切りする"""
-        expired = await db.get_expired_polls()
+        # ここで例外を外に出すとループ自体が止まるため必ず握る
+        try:
+            expired = await db.get_expired_polls()
+        except Exception as e:
+            logger.error(f"期限切れアンケートの取得に失敗しました: {e}")
+            return
         for poll in expired:
-            await db.close_poll(poll["poll_id"])
             try:
+                await db.close_poll(poll["poll_id"])
                 ch = self.bot.get_channel(poll["channel_id"])
                 if ch:
                     msg = await ch.fetch_message(int(poll["poll_id"]))
@@ -857,6 +903,8 @@ class PollCog(commands.Cog):
         deadline: Optional[str] = None,
         channel: Optional[discord.TextChannel] = None,
     ):
+        if await _reject_if_cannot_post(interaction, channel):
+            return
         target_channel = channel or interaction.channel
         option_list = [o.strip() for o in options.split(",") if o.strip()]
 
@@ -954,7 +1002,7 @@ class PollCog(commands.Cog):
             return
 
         is_creator = poll["creator_id"] == interaction.user.id
-        is_admin = interaction.user.guild_permissions.manage_guild
+        is_admin = _is_manager(interaction)
         if not is_creator and not is_admin:
             await interaction.response.send_message(
                 "❌ 締め切れるのは作成者またはサーバー管理者のみです。", ephemeral=True
@@ -1012,7 +1060,7 @@ class PollCog(commands.Cog):
             return
 
         is_creator = poll["creator_id"] == interaction.user.id
-        is_admin = interaction.user.guild_permissions.manage_guild
+        is_admin = _is_manager(interaction)
         if not is_creator and not is_admin:
             await interaction.response.send_message(
                 "❌ 更新できるのは作成者またはサーバー管理者のみです。", ephemeral=True
@@ -1068,7 +1116,7 @@ class PollCog(commands.Cog):
             return
 
         is_creator = poll["creator_id"] == interaction.user.id
-        is_admin = interaction.user.guild_permissions.manage_guild
+        is_admin = _is_manager(interaction)
         if not is_creator and not is_admin:
             await interaction.response.send_message(
                 "❌ 編集できるのは作成者またはサーバー管理者のみです。", ephemeral=True
@@ -1097,7 +1145,7 @@ class PollCog(commands.Cog):
         interaction: discord.Interaction,
         channel: Optional[discord.TextChannel] = None,
     ):
-        if not interaction.user.guild_permissions.manage_guild:
+        if not _is_manager(interaction):
             await interaction.response.send_message(
                 "❌ このコマンドはサーバー管理者のみ使用できます。", ephemeral=True
             )
@@ -1130,6 +1178,8 @@ class PollCog(commands.Cog):
         interaction: discord.Interaction,
         channel: Optional[discord.TextChannel] = None,
     ):
+        if await _reject_if_cannot_post(interaction, channel):
+            return
         target_channel = channel or interaction.channel
         modal = SurveyCreateModal(target_channel=target_channel, bot_instance=self.bot)
         await interaction.response.send_modal(modal)
@@ -1150,7 +1200,7 @@ class PollCog(commands.Cog):
             return
 
         is_creator = survey["creator_id"] == interaction.user.id
-        is_admin = interaction.user.guild_permissions.manage_guild
+        is_admin = _is_manager(interaction)
         if not is_creator and not is_admin:
             await interaction.response.send_message(
                 "❌ 締め切れるのは作成者またはサーバー管理者のみです。", ephemeral=True
@@ -1201,7 +1251,7 @@ class PollCog(commands.Cog):
             return
 
         is_creator = survey["creator_id"] == interaction.user.id
-        is_admin = interaction.user.guild_permissions.manage_guild
+        is_admin = _is_manager(interaction)
         if not is_creator and not is_admin:
             await interaction.response.send_message(
                 "❌ 編集できるのは作成者またはサーバー管理者のみです。", ephemeral=True
@@ -1234,7 +1284,7 @@ class PollCog(commands.Cog):
             return
 
         is_creator = survey["creator_id"] == interaction.user.id
-        is_admin = interaction.user.guild_permissions.manage_guild
+        is_admin = _is_manager(interaction)
         if not is_creator and not is_admin:
             await interaction.response.send_message(
                 "❌ 結果を確認できるのは作成者またはサーバー管理者のみです。", ephemeral=True
@@ -1250,8 +1300,6 @@ class PollCog(commands.Cog):
             )
             return
 
-        embeds: list[discord.Embed] = []
-
         summary_embed = discord.Embed(
             title=f"📊 アンケート結果: {survey['title']}",
             description=(
@@ -1260,14 +1308,27 @@ class PollCog(commands.Cog):
             ),
             color=discord.Color.gold(),
         )
-        embeds.append(summary_embed)
+        embeds: list[discord.Embed] = [summary_embed]
 
-        # 最大9件の個別回答を表示（合計10 Embed まで）
-        for i, row in enumerate(responses[:9]):
+        # 1メッセージのEmbedは10個・合計6000字までなので、収まる範囲だけ個別回答を表示し、
+        # 載せきれない場合は全回答をテキストファイルで添付する
+        budget = 5500 - len(summary_embed)
+        shown = 0
+        text_lines = [f"アンケート結果: {survey['title']}", f"回答数: {len(responses)}件", ""]
+        for i, row in enumerate(responses):
             answers = json.loads(row["answers"])
             user = self.bot.get_user(row["user_id"])
             user_name = user.display_name if user else f"User {row['user_id']}"
 
+            text_lines.append(f"■ 回答 #{i + 1} — {user_name} ({row.get('created_at', '')})")
+            for j, (q, a) in enumerate(zip(questions, answers)):
+                text_lines.append(f"Q{j + 1}. {q}")
+                text_lines.append(a or "（未入力）")
+            text_lines.append("")
+
+            # 途中で1件でも載せられなかったら、以降は順番が飛ばないよう表示しない
+            if shown != i or len(embeds) >= 9:
+                continue
             resp_embed = discord.Embed(
                 title=f"回答 #{i + 1} — {user_name}",
                 color=discord.Color.light_grey(),
@@ -1277,16 +1338,24 @@ class PollCog(commands.Cog):
                     name=f"Q{j + 1}. {q}", value=a or "（未入力）", inline=False
                 )
             resp_embed.set_footer(text=str(row.get("created_at", "")))
-            embeds.append(resp_embed)
+            if len(resp_embed) <= budget:
+                budget -= len(resp_embed)
+                embeds.append(resp_embed)
+                shown += 1
 
-        if len(responses) > 9:
-            note_embed = discord.Embed(
-                description=f"※ 表示は9件まで。残り {len(responses) - 9} 件は省略しました。",
-                color=discord.Color.light_grey(),
-            )
-            embeds.append(note_embed)
+        if shown == len(responses):
+            await interaction.response.send_message(embeds=embeds, ephemeral=True)
+            return
 
-        await interaction.response.send_message(embeds=embeds, ephemeral=True)
+        embeds.append(discord.Embed(
+            description=f"※ ここに表示したのは {shown} 件です。全 {len(responses)} 件は添付ファイルで確認できます。",
+            color=discord.Color.light_grey(),
+        ))
+        result_file = discord.File(
+            io.BytesIO("\n".join(text_lines).encode("utf-8-sig")),
+            filename=f"survey_{message_id}.txt",
+        )
+        await interaction.response.send_message(embeds=embeds, file=result_file, ephemeral=True)
 
 
 async def setup(bot: commands.Bot):

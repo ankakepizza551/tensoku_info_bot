@@ -10,6 +10,11 @@ from cogs.report_cog import CHARACTERS
 
 logger = logging.getLogger("TensokuMatchBot")
 
+# 結果報告の「状態確認→戦績登録→状態更新」を直列化する（両者の同時送信による二重登録防止）
+_report_lock = asyncio.Lock()
+# 対戦申し込みの「状態確認→状態更新」を直列化する（2人同時の申し込みで片方が黙って上書きされるのを防ぐ）
+_join_lock = asyncio.Lock()
+
 
 # ─────────────────────────────────────────────
 #  ユーティリティ
@@ -177,18 +182,28 @@ class ThreadMatchReportModal(discord.ui.Modal):
         await interaction.response.defer()
 
         try:
-            result = await db_manager.add_match(
-                reporter_id=reporter.id,
-                player1_id=self.recruiter.id,
-                player1_name=self.recruiter.display_name,
-                player2_id=self.challenger.id,
-                player2_name=self.challenger.display_name,
-                score1=score1,
-                score2=score2,
-                char1=char1,
-                char2=char2,
-                rated=False,
-            )
+            async with _report_lock:
+                # モーダルを開いている間に、相手側の報告が先に確定していないか確認する
+                thread_info = await db_manager.get_recruit_thread(self.thread_id)
+                if thread_info is None or thread_info["status"] != "in_progress":
+                    await interaction.followup.send(
+                        "❌ この対戦の結果は、すでに報告されています。", ephemeral=True
+                    )
+                    return
+
+                result = await db_manager.add_match(
+                    reporter_id=reporter.id,
+                    player1_id=self.recruiter.id,
+                    player1_name=self.recruiter.display_name,
+                    player2_id=self.challenger.id,
+                    player2_name=self.challenger.display_name,
+                    score1=score1,
+                    score2=score2,
+                    char1=char1,
+                    char2=char2,
+                    rated=False,
+                )
+                await db_manager.update_recruit_thread_status(self.thread_id, "completed")
 
             if score1 > score2:
                 winner_text = f"🏆 **{self.recruiter.display_name}** の勝利！"
@@ -229,7 +244,6 @@ class ThreadMatchReportModal(discord.ui.Modal):
             )
             completed_view = ThreadCompletedView(self.thread_id)
             await self.panel_message.edit(embed=closed_embed, view=completed_view)
-            await db_manager.update_recruit_thread_status(self.thread_id, "completed")
 
             await interaction.followup.send(embed=result_embed)
             logger.info(
@@ -301,6 +315,17 @@ class ThreadRecruitingView(discord.ui.View):
             return
 
         challenger = interaction.user
+        async with _join_lock:
+            thread_info = await db_manager.get_recruit_thread(self.thread_id)
+            if thread_info is not None and thread_info["status"] != "recruiting":
+                await interaction.response.send_message(
+                    "❌ この募集はすでに対戦相手が決まっているか、終了しています。", ephemeral=True
+                )
+                return
+            await db_manager.update_recruit_thread_status(
+                self.thread_id, "in_progress", challenger_id=challenger.id
+            )
+
         recruiter = interaction.guild.get_member(self.recruiter_id)
         recruiter_mention = recruiter.mention if recruiter else f"<@{self.recruiter_id}>"
 
@@ -314,10 +339,6 @@ class ThreadRecruitingView(discord.ui.View):
         )
         in_progress_view = ThreadInProgressView(self.thread_id, self.recruiter_id, challenger.id)
         await interaction.response.edit_message(embed=in_progress_embed, view=in_progress_view)
-
-        await db_manager.update_recruit_thread_status(
-            self.thread_id, "in_progress", challenger_id=challenger.id
-        )
 
         await interaction.channel.send(
             f"⚔️ 対戦開始: {recruiter_mention} vs {challenger.mention} ！\n"
@@ -579,7 +600,13 @@ class RecruitForumModal(discord.ui.Modal):
                         f"{mention}対戦募集が投稿されました！\n"
                         f"**{self.thread_title.value}**\n"
                         f"募集者: {interaction.user.mention} / 接続: {conn}\n"
-                        f"→ {thread.mention}"
+                        f"→ {thread.mention}",
+                        # 通知するのは設定済みのロールだけにし、タイトル等に書かれたメンションは飛ばさない
+                        allowed_mentions=discord.AllowedMentions(
+                            everyone=False,
+                            users=False,
+                            roles=[discord.Object(id=self.mention_role_id)] if self.mention_role_id else False,
+                        ),
                     )
 
             logger.info(

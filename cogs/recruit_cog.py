@@ -81,10 +81,16 @@ class MatchReportModal(discord.ui.Modal):
             
         char1 = find_character(char1_raw)
         char2 = find_character(char2_raw)
-        
+
+        # 両者がフォームを開いたまま順に送信しても、戦績が二重に登録されないようにする
+        if self.recruit_view.reported:
+            await interaction.response.send_message("❌ この対戦の結果は、すでに報告されています。", ephemeral=True)
+            return
+        self.recruit_view.reported = True
+
         # レスポンス待機
         await interaction.response.defer()
-        
+
         try:
             # 戦績の登録
             result = await db_manager.add_match(
@@ -159,6 +165,7 @@ class MatchReportModal(discord.ui.Modal):
             self.recruit_view.stop()
             
         except Exception as e:
+            self.recruit_view.reported = False
             await interaction.followup.send(f"❌ 戦績の登録中にエラーが発生しました: {e}", ephemeral=True)
 
 class RecruitView(discord.ui.View):
@@ -169,6 +176,7 @@ class RecruitView(discord.ui.View):
         self.comment = comment
         self.format_str = format_str
         self.challenger = None
+        self.reported = False
 
     @discord.ui.button(label="対戦を申し込む", style=discord.ButtonStyle.primary)
     async def join_match(self, interaction: discord.Interaction, button: discord.ui.Button):

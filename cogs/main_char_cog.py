@@ -28,10 +28,13 @@ def _build_distribution_embed(records: list) -> discord.Embed:
 
     embed = discord.Embed(
         title="🎮 メインキャラクター分布",
-        description=f"登録人数: `{total}`人\nキャラクターを選ぶと使用者一覧を確認できます。",
+        # 全キャラ分の行はフィールドの上限(1024字)に収まらないため、本文(4096字)に載せる
+        description=(
+            f"登録人数: `{total}`人\nキャラクターを選ぶと使用者一覧を確認できます。\n\n"
+            f"**分布**\n{distribution_text}"
+        ),
         color=_DISTRIBUTION_COLOR
     )
-    embed.add_field(name="分布", value=distribution_text, inline=False)
     return embed
 
 

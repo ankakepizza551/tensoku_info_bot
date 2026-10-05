@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import random
 
@@ -120,9 +121,10 @@ class TerritoryCellSelect(discord.ui.Select):
 class TerritoryExpansionView(discord.ui.View):
     """勝利チームが侵略度分だけ隣接マスを自由に選んで塗り替えるための一時View（隣接候補が侵略度を超える場合のみ使用）"""
 
-    def __init__(self, cog: "TerritoryCog", guild_id: int, team_index: int, owner_map: dict, frontier: set, remaining: int, side: int):
+    def __init__(self, cog: "TerritoryCog", guild_id: int, team_index: int, owner_map: dict, frontier: set, remaining: int, side: int, match_id: int):
         super().__init__(timeout=600)
         self.cog = cog
+        self.match_id = match_id
         self.guild_id = guild_id
         self.team_index = team_index
         self.owner_map = dict(owner_map)
@@ -130,6 +132,7 @@ class TerritoryExpansionView(discord.ui.View):
         self.remaining = remaining
         self.side = side
         self.message: discord.Message | None = None
+        self._lock = asyncio.Lock()
         self._build_select()
 
     def _build_select(self):
@@ -142,10 +145,23 @@ class TerritoryExpansionView(discord.ui.View):
         self.add_item(TerritoryCellSelect(options, max_values))
 
     async def handle_select(self, interaction: discord.Interaction, cell_indices: list):
+        # チームの複数人が同時に選ぶと、残り数の確認と更新が入り乱れて侵略度を超えて塗れてしまうため直列化する
+        async with self._lock:
+            await self._handle_select_locked(interaction, cell_indices)
+
+    async def _handle_select_locked(self, interaction: discord.Interaction, cell_indices: list):
         team_row = await db_manager.get_territory_team_of_user(self.guild_id, interaction.user.id)
         if team_row is None or team_row["team_index"] != self.team_index:
             await interaction.response.send_message(
                 "❌ 勝利チームのメンバーのみ選択できます。", ephemeral=True
+            )
+            return
+
+        # 選択中に対戦結果が削除された場合は、これ以上塗らせない
+        if await db_manager.get_territory_match(self.match_id) is None:
+            self.stop()
+            await interaction.response.edit_message(
+                content="🗑️ この対戦結果は削除されたため、陣地の拡張は中止されました。", view=None
             )
             return
 
@@ -155,7 +171,7 @@ class TerritoryExpansionView(discord.ui.View):
             return
 
         for cell_index in cell_indices:
-            await db_manager.set_territory_grid_cell(self.guild_id, cell_index, self.team_index)
+            await db_manager.set_territory_grid_cell(self.guild_id, cell_index, self.team_index, self.match_id)
             self.owner_map[cell_index] = self.team_index
             self.frontier.discard(cell_index)
             self.remaining -= 1
@@ -442,7 +458,9 @@ class TerritoryResultButton(discord.ui.Button):
 
         await interaction.response.edit_message(content="✅ 対戦結果を送信しました。", view=None)
         await interaction.followup.send(embed=outcome["embed"])
-        await view.cog._expand_territory(interaction, guild_id, outcome["winner_team_index"], outcome["invasion"])
+        await view.cog._expand_territory(
+            interaction, guild_id, outcome["winner_team_index"], outcome["invasion"], outcome["match_id"]
+        )
         await view.cog._check_round_finished(
             interaction, guild_id, outcome["fought_before"], outcome["winner_id"], outcome["loser_id"]
         )
@@ -561,6 +579,7 @@ class TerritoryCog(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
+        self._report_lock = asyncio.Lock()
 
     async def cog_load(self):
         self.bot.add_view(TerritoryRegisterPanelView(self))
@@ -1115,6 +1134,12 @@ class TerritoryCog(commands.Cog):
             team_totals[idx] += s
             team_counts[idx] += 1
 
+        # ここから先はDB書き込みとロール・チャンネル作成で応答期限（3秒）を超えうるため、先に応答を保留する
+        await interaction.response.defer()
+
+        # 再抽選は新しい大会として扱う。前回の対戦履歴が残っていると、同じ周回番号の
+        # 「出場済み」判定に引っかかって報告できず、侵略度も引き継がれてしまうため消しておく
+        await db_manager.clear_territory_matches(interaction.guild_id)
         await db_manager.clear_territory_teams(interaction.guild_id)
         for i, members_in_team in enumerate(teams):
             for md in members_in_team:
@@ -1129,8 +1154,6 @@ class TerritoryCog(commands.Cog):
 
         await db_manager.init_territory_grid(interaction.guild_id, n_teams)
         await db_manager.reset_territory_round(interaction.guild_id)
-
-        await interaction.response.defer()
 
         team_roles, team_channels, team_voice_channels = await self._sync_team_roles_and_channels(
             guild, teams, target_category
@@ -1223,7 +1246,8 @@ class TerritoryCog(commands.Cog):
         return embed
 
     async def _expand_territory(
-        self, interaction: discord.Interaction, guild_id: int, team_index: int, invasion_score: int
+        self, interaction: discord.Interaction, guild_id: int, team_index: int, invasion_score: int,
+        match_id: int,
     ):
         grid = await db_manager.get_territory_grid(guild_id)
         if not grid:
@@ -1241,7 +1265,7 @@ class TerritoryCog(commands.Cog):
 
         if len(frontier) <= invasion_score:
             for idx in frontier:
-                await db_manager.set_territory_grid_cell(guild_id, idx, team_index)
+                await db_manager.set_territory_grid_cell(guild_id, idx, team_index, match_id)
             embed = await self._build_grid_embed(guild_id)
             await interaction.followup.send(
                 content=f"🗺️ {TEAM_LABELS[team_index]} が侵略度{invasion_score}分の隣接陣地を全て獲得しました！",
@@ -1249,7 +1273,7 @@ class TerritoryCog(commands.Cog):
             )
             return
 
-        view = TerritoryExpansionView(self, guild_id, team_index, owner_map, frontier, invasion_score, side)
+        view = TerritoryExpansionView(self, guild_id, team_index, owner_map, frontier, invasion_score, side, match_id)
         embed = await self._build_grid_embed(guild_id)
         msg = await interaction.followup.send(
             content=(
@@ -1309,6 +1333,13 @@ class TerritoryCog(commands.Cog):
         self, guild_id: int, reporter: discord.Member, opponent: discord.Member, result_value: str
     ) -> dict:
         """対戦結果の検証・侵略度計算・DB登録を行い、結果を辞書で返す（Discord応答は呼び出し元が行う）"""
+        # 「出場済みの確認→登録」を直列化し、両者が同時に報告しても同じ対戦が二重に登録されないようにする
+        async with self._report_lock:
+            return await self._process_territory_report_locked(guild_id, reporter, opponent, result_value)
+
+    async def _process_territory_report_locked(
+        self, guild_id: int, reporter: discord.Member, opponent: discord.Member, result_value: str
+    ) -> dict:
         if opponent.id == reporter.id:
             return {"ok": False, "error": "❌ 自分自身を対戦相手に指定できません。"}
 
@@ -1405,6 +1436,7 @@ class TerritoryCog(commands.Cog):
             "fought_before": fought,
             "winner_id": winner.id,
             "loser_id": loser.id,
+            "match_id": match_id,
         }
 
     async def _check_round_finished(
@@ -1451,7 +1483,9 @@ class TerritoryCog(commands.Cog):
             return
 
         await interaction.response.send_message(embed=outcome["embed"])
-        await self._expand_territory(interaction, guild_id, outcome["winner_team_index"], outcome["invasion"])
+        await self._expand_territory(
+            interaction, guild_id, outcome["winner_team_index"], outcome["invasion"], outcome["match_id"]
+        )
         await self._check_round_finished(
             interaction, guild_id, outcome["fought_before"], outcome["winner_id"], outcome["loser_id"]
         )
@@ -1528,14 +1562,17 @@ class TerritoryCog(commands.Cog):
 
     async def _process_match_delete(self, interaction: discord.Interaction, match_id: int):
         match_data = await db_manager.get_territory_match(match_id)
-        if not match_data:
+        if not match_data or match_data["guild_id"] != interaction.guild_id:
             await interaction.response.send_message(
                 f"❌ 対戦ID `{match_id}` の記録が見つかりませんでした。", ephemeral=True
             )
             return
 
         is_reporter = match_data["reporter_id"] == interaction.user.id
-        is_admin = interaction.user.guild_permissions.administrator
+        is_admin = (
+            isinstance(interaction.user, discord.Member)
+            and interaction.user.guild_permissions.administrator
+        )
         if not (is_reporter or is_admin):
             await interaction.response.send_message(
                 "❌ この記録を削除する権限がありません（報告者本人または管理者のみ削除可能です）。",
@@ -1543,11 +1580,29 @@ class TerritoryCog(commands.Cog):
             )
             return
 
-        await db_manager.delete_territory_match(match_id)
-        await interaction.response.send_message(
-            f"🗑️ 対戦ID `{match_id}` の記録を削除しました。該当メンバーは再度出場可能になります。"
+        guild_id = match_data["guild_id"]
+        # 報告処理と同じロックを取り、削除と塗り替えの巻き戻しの途中に別の報告が割り込まないようにする
+        async with self._report_lock:
+            await db_manager.delete_territory_match(match_id)
+            restored, skipped = await db_manager.revert_territory_match_cells(guild_id, match_id)
+
+        text = f"🗑️ 対戦ID `{match_id}` の記録を削除しました。該当メンバーは再度出場可能になります。"
+        if restored:
+            text += f"\n🗺️ この対戦で塗り替えた {restored} マスを元のチームに戻しました。"
+        if skipped:
+            text += f"\n⚠️ {skipped} マスは、その後ほかの対戦で塗り替えられているため戻していません。"
+        if not restored and not skipped:
+            text += "\n🗺️ この対戦で塗り替えたマスの記録がないため、陣地マップは変更していません。"
+
+        embed = await self._build_grid_embed(guild_id) if restored else None
+        if embed is not None:
+            await interaction.response.send_message(text, embed=embed)
+        else:
+            await interaction.response.send_message(text)
+        logger.info(
+            f"territory_match_delete: match={match_id} by user={interaction.user.id} "
+            f"restored={restored} skipped={skipped}"
         )
-        logger.info(f"territory_match_delete: match={match_id} by user={interaction.user.id}")
 
     @app_commands.command(
         name="territory_match_delete",

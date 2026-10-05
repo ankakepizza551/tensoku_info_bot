@@ -116,6 +116,21 @@ async def init_db():
         )
         await db.commit()
 
+        # 陣取りゲーム 対戦ごとに塗り替えたマスの記録（対戦結果を削除したときにマップを元に戻すため）
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS territory_cell_changes (
+                change_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id INTEGER NOT NULL,
+                match_id INTEGER NOT NULL,
+                cell_index INTEGER NOT NULL,
+                prev_team INTEGER NOT NULL,
+                new_team INTEGER NOT NULL
+            )
+            """
+        )
+        await db.commit()
+
         # 陣取りゲーム ギルド設定（参加者ロール・チームチャンネル設置先カテゴリ）
         await db.execute(
             """

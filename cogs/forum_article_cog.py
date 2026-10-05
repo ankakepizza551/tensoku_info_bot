@@ -5,7 +5,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from database import db_manager
-from cogs.post_cog import _auto_decorate
+from cogs.post_cog import _auto_decorate, can_post_to_forum
 
 logger = logging.getLogger("TensokuMatchBot")
 
@@ -152,6 +152,12 @@ class ArticleBuilderView(discord.ui.View):
             )
             return
 
+        if not can_post_to_forum(interaction.user, forum_channel):
+            await interaction.response.send_message(
+                f"❌ {forum_channel.mention} に投稿する権限がありません。", ephemeral=True
+            )
+            return
+
         perms = forum_channel.permissions_for(interaction.guild.me)
         if not perms.create_public_threads:
             await interaction.response.send_message(
@@ -257,7 +263,8 @@ class ArticleContentModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction):
         self.builder.data["title"] = self.title_input.value
-        self.builder.data["body"] = _auto_decorate(self.body_input.value)
+        # 自動装飾で増えた分を含めて、編集フォームの上限(4000字)に収める
+        self.builder.data["body"] = _auto_decorate(self.body_input.value)[:4000]
         await self.builder._refresh(interaction)
 
 
@@ -297,10 +304,15 @@ class FormatAppendModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction):
         formatted = f"{self.pre}{self.text_input.value}{self.post}"
-        if self.builder.data["body"]:
-            self.builder.data["body"] += f"\n{formatted}"
-        else:
-            self.builder.data["body"] = formatted
+        body = f"{self.builder.data['body']}\n{formatted}" if self.builder.data["body"] else formatted
+        # 本文は編集フォームの上限(4000字)を超えると、以降フォームを開けず投稿もできなくなる
+        if len(body) > 4000:
+            await interaction.response.send_message(
+                "❌ 本文が4000字を超えるため追記できません。「📝 タイトル・本文」から本文を短くしてください。",
+                ephemeral=True,
+            )
+            return
+        self.builder.data["body"] = body
         await self.builder._refresh(interaction)
 
 
@@ -494,10 +506,15 @@ class ArticleControlView(discord.ui.View):
 
 async def _open_builder(interaction: discord.Interaction, forum_channel_id: int) -> None:
     """選択されたフォーラムのビルダーをチャンネルに展開する共通処理"""
+    channel = interaction.guild.get_channel(forum_channel_id)
+    if not isinstance(channel, discord.ForumChannel) or not can_post_to_forum(interaction.user, channel):
+        await interaction.response.edit_message(
+            content="❌ このフォーラムチャンネルに投稿する権限がありません。", view=None
+        )
+        return
     view = ArticleBuilderView(forum_channel_id=forum_channel_id, author=interaction.user)
     preview = view._build_embed(is_preview=True)
-    channel = interaction.guild.get_channel(forum_channel_id)
-    mention = channel.mention if channel else f"<#{forum_channel_id}>"
+    mention = channel.mention
     await interaction.response.edit_message(content=f"投稿先: {mention}", view=None)
     await interaction.followup.send(embed=preview, view=view)
 
@@ -570,10 +587,11 @@ class ArticlePanelView(discord.ui.View):
             forums = [
                 ch for ch in interaction.guild.channels
                 if isinstance(ch, discord.ForumChannel) and ch.category_id == self.category_id
+                and can_post_to_forum(interaction.user, ch)
             ]
             if not forums:
                 await interaction.response.send_message(
-                    "❌ 指定カテゴリー内にフォーラムチャンネルが見つかりません。", ephemeral=True
+                    "❌ 指定カテゴリー内に、あなたが投稿できるフォーラムチャンネルが見つかりません。", ephemeral=True
                 )
                 return
             view = ArticleFilteredSelectView(author=interaction.user, forums=forums)
