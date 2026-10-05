@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 import discord
@@ -13,6 +14,9 @@ from cogs.forum_recruit_cog import find_character
 logger = logging.getLogger("TensokuMatchBot")
 
 BEST_OF = "2先 (2本先取)"
+
+# 結果報告・修正の「状態確認→戦績登録→状態更新」を直列化する（両者の同時送信による二重登録防止）
+_report_lock = asyncio.Lock()
 
 
 # ─────────────────────────────────────────────
@@ -233,9 +237,11 @@ class RatingMatchReportModal(discord.ui.Modal):
         profile2: dict,
         panel_message: discord.Message,
         previous_match_id: int | None = None,
+        is_correction: bool = False,
     ):
-        title = "🔁 レーティング対戦結果の修正" if previous_match_id else "📝 レーティング対戦結果の報告"
+        title = "🔁 レーティング対戦結果の修正" if is_correction else "📝 レーティング対戦結果の報告"
         super().__init__(title=title)
+        self.is_correction = is_correction
         self.thread_id = thread_id
         self.player1 = player1
         self.player2 = player2
@@ -277,25 +283,43 @@ class RatingMatchReportModal(discord.ui.Modal):
         await interaction.response.defer()
 
         try:
-            if self.previous_match_id is not None:
-                # 修正の場合、まず以前の登録を削除してレート変動を巻き戻してから登録し直す
-                await db_manager.delete_match(self.previous_match_id)
+            async with _report_lock:
+                # モーダルを開いている間に、相手側の報告・修正が先に確定していないか確認する
+                thread_info = await db_manager.get_rating_thread(self.thread_id)
+                expected_status = "completed" if self.is_correction else "in_progress"
+                if (
+                    thread_info is None
+                    or thread_info["status"] != expected_status
+                    or thread_info["last_match_id"] != self.previous_match_id
+                ):
+                    await interaction.followup.send(
+                        "❌ この対戦の結果は、すでに報告または修正されています。"
+                        "内容が違う場合は「🔁 結果を修正する」ボタンからやり直してください。",
+                        ephemeral=True,
+                    )
+                    return
 
-            old_rank1 = get_rank((await db_manager.get_or_create_user(self.player1.id, self.player1.display_name))["rating"])
-            old_rank2 = get_rank((await db_manager.get_or_create_user(self.player2.id, self.player2.display_name))["rating"])
+                if self.previous_match_id is not None:
+                    # 修正の場合、まず以前の登録を削除してレート変動を巻き戻してから登録し直す
+                    await db_manager.delete_match(self.previous_match_id)
 
-            result = await db_manager.add_match(
-                reporter_id=reporter.id,
-                player1_id=self.player1.id,
-                player1_name=self.player1.display_name,
-                player2_id=self.player2.id,
-                player2_name=self.player2.display_name,
-                score1=score1,
-                score2=score2,
-                char1=char1,
-                char2=char2,
-                rated=True,
-            )
+                old_rank1 = get_rank((await db_manager.get_or_create_user(self.player1.id, self.player1.display_name))["rating"])
+                old_rank2 = get_rank((await db_manager.get_or_create_user(self.player2.id, self.player2.display_name))["rating"])
+
+                result = await db_manager.add_match(
+                    reporter_id=reporter.id,
+                    player1_id=self.player1.id,
+                    player1_name=self.player1.display_name,
+                    player2_id=self.player2.id,
+                    player2_name=self.player2.display_name,
+                    score1=score1,
+                    score2=score2,
+                    char1=char1,
+                    char2=char2,
+                    rated=True,
+                )
+                await db_manager.update_rating_thread_status(self.thread_id, "completed")
+                await db_manager.update_rating_thread_match_id(self.thread_id, result["match_id"])
 
             if score1 > score2:
                 winner_text = f"🏆 **{self.player1.display_name}** の勝利！"
@@ -314,11 +338,12 @@ class RatingMatchReportModal(discord.ui.Modal):
                     return ""
                 return f" 🎉 ランク変動: `{old_rank}` → `{new_rank}`"
 
-            is_correction = self.previous_match_id is not None
+            is_correction = self.is_correction
             result_embed = discord.Embed(
                 title="🔁 対戦結果 修正 (有頂天の塔)" if is_correction else "📊 対戦結果 (有頂天の塔)",
                 description=(
-                    (f"以前の登録（Match ID: `{self.previous_match_id}`）を修正しました。\n" if is_correction else "")
+                    (f"以前の登録（Match ID: `{self.previous_match_id}`）を修正しました。\n"
+                     if self.previous_match_id is not None else "")
                     + f"{winner_text}\n**Match ID:** `{result['match_id']}`"
                 ),
                 color=discord.Color.from_rgb(155, 89, 182),
@@ -354,8 +379,6 @@ class RatingMatchReportModal(discord.ui.Modal):
             )
             completed_view = RatingThreadCompletedView(self.thread_id)
             await self.panel_message.edit(embed=closed_embed, view=completed_view)
-            await db_manager.update_rating_thread_status(self.thread_id, "completed")
-            await db_manager.update_rating_thread_match_id(self.thread_id, result["match_id"])
 
             await sync_rank_role(self.player1, result["new_rating1"])
             await sync_rank_role(self.player2, result["new_rating2"])
@@ -522,6 +545,7 @@ class RatingThreadCompletedView(discord.ui.View):
             profile2=profile2,
             panel_message=interaction.message,
             previous_match_id=thread_info.get("last_match_id"),
+            is_correction=True,
         )
         await interaction.response.send_modal(modal)
 

@@ -85,8 +85,14 @@ class MvpCog(commands.Cog):
 
     @tasks.loop(minutes=10)
     async def _post_monthly_mvp(self):
-        prev = _previous_month(datetime.datetime.now(JST))
-        for setting in await db_manager.get_mvp_settings():
+        # ここで例外を外に出すとループ自体が止まり、再起動まで投稿されなくなるため必ず握る
+        try:
+            prev = _previous_month(datetime.datetime.now(JST))
+            settings = await db_manager.get_mvp_settings()
+        except Exception as e:
+            logger.error(f"MVP設定取得失敗: {e}")
+            return
+        for setting in settings:
             if setting["last_posted_month"] == prev:
                 continue
             channel = self.bot.get_channel(setting["channel_id"])
@@ -96,10 +102,9 @@ class MvpCog(commands.Cog):
             try:
                 mvp = await db_manager.get_monthly_mvp(prev)
                 await channel.send(embed=build_mvp_embed(mvp), view=MvpPanelView())
-            except discord.HTTPException as e:
+                await db_manager.mark_mvp_posted(setting["guild_id"], prev)
+            except Exception as e:
                 logger.warning(f"MVP投稿失敗 (guild={setting['guild_id']}): {e}")
-                continue
-            await db_manager.mark_mvp_posted(setting["guild_id"], prev)
 
     @_post_monthly_mvp.before_loop
     async def _before_post_monthly_mvp(self):

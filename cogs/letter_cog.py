@@ -197,9 +197,22 @@ class ReplyEditModal(discord.ui.Modal, title="💬 返信内容を編集"):
         )
 
 
+async def _reject_outside_guild(interaction: discord.Interaction) -> bool:
+    """管理者用コマンドがDMから実行された場合に拒否する（default_permissions はDMでは効かないため）"""
+    if interaction.guild is not None:
+        return False
+    await interaction.response.send_message(
+        "❌ このコマンドはサーバー内で実行してください。", ephemeral=True
+    )
+    return True
+
+
 @app_commands.context_menu(name="お便り返信を編集")
 @app_commands.default_permissions(administrator=True)
+@app_commands.guild_only()
 async def edit_letter_reply(interaction: discord.Interaction, message: discord.Message):
+    if await _reject_outside_guild(interaction):
+        return
     if message.author.id != interaction.client.user.id or not message.embeds:
         await interaction.response.send_message(
             "❌ このメッセージはBotが投稿したお便り返信ではありません。",
@@ -290,7 +303,10 @@ class LetterCog(commands.Cog):
     @app_commands.command(name="tegami_check", description="【管理者専用】お便りの送信者を確認します")
     @app_commands.describe(letter_id="確認したいお便りのNo.")
     @app_commands.default_permissions(administrator=True)
+    @app_commands.guild_only()
     async def tegami_check(self, interaction: discord.Interaction, letter_id: int):
+        if await _reject_outside_guild(interaction):
+            return
         letter = await get_letter(letter_id)
         if letter is None:
             await interaction.response.send_message(
@@ -344,6 +360,7 @@ class LetterCog(commands.Cog):
         channel="返信を投稿するチャンネル（未指定の場合は既定のお便り返信チャンネル）",
     )
     @app_commands.default_permissions(administrator=True)
+    @app_commands.guild_only()
     async def tegami_reply(
         self,
         interaction: discord.Interaction,
@@ -351,6 +368,8 @@ class LetterCog(commands.Cog):
         quote: bool = True,
         channel: discord.TextChannel = None,
     ):
+        if await _reject_outside_guild(interaction):
+            return
         letter = await get_letter(letter_id)
         if letter is None:
             await interaction.response.send_message(
@@ -377,7 +396,10 @@ class LetterCog(commands.Cog):
     @app_commands.command(name="tegami_hide", description="【管理者専用】不適切なお便りを非表示にします")
     @app_commands.describe(letter_id="非表示にしたいお便りのNo.")
     @app_commands.default_permissions(administrator=True)
+    @app_commands.guild_only()
     async def tegami_hide(self, interaction: discord.Interaction, letter_id: int):
+        if await _reject_outside_guild(interaction):
+            return
         letter = await get_letter(letter_id)
         if letter is None:
             await interaction.response.send_message(
@@ -406,7 +428,10 @@ class LetterCog(commands.Cog):
     @app_commands.command(name="tegami_unhide", description="【管理者専用】非表示にしたお便りを再表示します")
     @app_commands.describe(letter_id="再表示したいお便りのNo.")
     @app_commands.default_permissions(administrator=True)
+    @app_commands.guild_only()
     async def tegami_unhide(self, interaction: discord.Interaction, letter_id: int):
+        if await _reject_outside_guild(interaction):
+            return
         letter = await get_letter(letter_id)
         if letter is None:
             await interaction.response.send_message(

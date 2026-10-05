@@ -34,23 +34,48 @@ class EventReminderCog(commands.Cog):
 
     @tasks.loop(minutes=1)
     async def _check_due_reminders(self):
-        now_str = datetime.datetime.now(JST).strftime("%Y-%m-%d %H:%M")
-        due = await db_manager.get_due_reminders(now_str)
+        # ここで例外を外に出すとループ自体が止まり、再起動まで通知されなくなるため必ず握る
+        try:
+            now_str = datetime.datetime.now(JST).strftime("%Y-%m-%d %H:%M")
+            due = await db_manager.get_due_reminders(now_str)
+        except Exception as e:
+            logger.error(f"reminder取得失敗: {e}")
+            return
         for reminder in due:
-            await db_manager.mark_reminder_sent(reminder["reminder_id"])
-            thread = self.bot.get_channel(reminder["thread_id"])
-            if not isinstance(thread, discord.Thread):
-                logger.warning(
-                    f"reminder送信スキップ（スレッドが見つかりません）: reminder_id={reminder['reminder_id']}"
-                )
-                continue
-            content = f"⏰ **リマインダー**\n{reminder['message']}"
-            if reminder["role_id"]:
-                content = f"<@&{reminder['role_id']}>\n{content}"
             try:
-                await thread.send(content)
+                await self._send_reminder(reminder)
+            except Exception as e:
+                logger.error(f"reminder処理失敗 (reminder_id={reminder['reminder_id']}): {e}")
+
+    async def _send_reminder(self, reminder: dict):
+        """リマインダーを1件送信する。一時的な障害のときは送信済みにせず、次の周期で再試行する"""
+        reminder_id = reminder["reminder_id"]
+        thread = self.bot.get_channel(reminder["thread_id"])
+        if thread is None:
+            # アーカイブ済みのスレッドはキャッシュに無いので、APIから取得する
+            try:
+                thread = await self.bot.fetch_channel(reminder["thread_id"])
+            except (discord.NotFound, discord.Forbidden):
+                thread = None
             except discord.HTTPException as e:
-                logger.warning(f"reminder送信失敗 (reminder_id={reminder['reminder_id']}): {e}")
+                logger.warning(f"reminderスレッド取得失敗・次回再試行 (reminder_id={reminder_id}): {e}")
+                return
+        if not isinstance(thread, discord.Thread):
+            await db_manager.mark_reminder_sent(reminder_id)
+            logger.warning(f"reminder送信スキップ（スレッドが見つかりません）: reminder_id={reminder_id}")
+            return
+
+        content = f"⏰ **リマインダー**\n{reminder['message']}"
+        if reminder["role_id"]:
+            content = f"<@&{reminder['role_id']}>\n{content}"
+        try:
+            await thread.send(content)
+        except discord.DiscordServerError as e:
+            logger.warning(f"reminder送信失敗・次回再試行 (reminder_id={reminder_id}): {e}")
+            return
+        except discord.HTTPException as e:
+            logger.warning(f"reminder送信失敗 (reminder_id={reminder_id}): {e}")
+        await db_manager.mark_reminder_sent(reminder_id)
 
     @_check_due_reminders.before_loop
     async def _before_check_due_reminders(self):

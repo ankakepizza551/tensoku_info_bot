@@ -135,10 +135,22 @@ class ReportCog(commands.Cog):
                 
             # 権限チェック (報告者本人、またはサーバーの管理者)
             is_reporter = (match_data["reporter_id"] == interaction.user.id)
-            is_admin = interaction.user.guild_permissions.administrator
-            
+            is_admin = (
+                isinstance(interaction.user, discord.Member)
+                and interaction.user.guild_permissions.administrator
+            )
+
             if not (is_reporter or is_admin):
                 await interaction.response.send_message("❌ この戦績を削除する権限がありません（報告者本人または管理者のみ削除可能です）。", ephemeral=True)
+                return
+
+            # レート戦は報告者（敗者の場合もある）が単独で取り消せないようにする
+            if match_data["is_rated"] and not is_admin:
+                await interaction.response.send_message(
+                    "❌ 有頂天の塔（レート戦）の戦績は `/delete_match` では削除できません。"
+                    "対戦スレッドの「🔁 結果を修正する」ボタンで訂正するか、管理者に依頼してください。",
+                    ephemeral=True,
+                )
                 return
                 
             # 削除の実行
