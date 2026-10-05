@@ -58,7 +58,8 @@ class StatsCog(commands.Cog):
                 name="総合戦績",
                 value=f"**レーティング:** `{round(user_rating, 1)}` (ランク: `{user_rank}`) (初期値: 1500)\n"
                       f"**総対戦数:** `{total}` 戦\n"
-                      f"**勝敗数:** `{wins}` 勝 `{losses}` 敗\n"
+                      f"**勝敗数:** `{wins}` 勝 `{losses}` 敗"
+                      + (f" `{stats_data['draws']}` 分" if stats_data["draws"] else "") + "\n"
                       f"**勝率:** `{win_rate}%`\n"
                       f"**ゲージ:** {gauge}",
                 inline=False
@@ -93,7 +94,7 @@ class StatsCog(commands.Cog):
             if recent_list:
                 history_text = ""
                 for m in recent_list:
-                    result_emoji = "🟢" if m["is_win"] else "🔴"
+                    result_emoji = "🟢" if m["is_win"] else ("🟡" if m["is_draw"] else "🔴")
                     my_char_display = f"({m['my_char']})" if m['my_char'] else ""
                     opp_char_display = f"({m['opponent_char']})" if m['opponent_char'] else ""
                     

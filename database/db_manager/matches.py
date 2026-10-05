@@ -36,46 +36,70 @@ async def get_or_create_user(user_id: int, username: str):
 
         return user
 
+async def _delete_match_in_tx(db, match_id: int) -> bool:
+    """開始済みのトランザクション内で戦績を削除し、レーティング変動を巻き戻す"""
+    async with db.execute("SELECT * FROM matches WHERE match_id = ?", (match_id,)) as cursor:
+        match_data = await cursor.fetchone()
+    if not match_data:
+        return False
+
+    change1 = match_data["rating_change1"] or 0.0
+    change2 = match_data["rating_change2"] or 0.0
+
+    await db.execute("DELETE FROM matches WHERE match_id = ?", (match_id,))
+    # レーティングの巻き戻し (引く)
+    await db.execute("UPDATE users SET rating = rating - ? WHERE user_id = ?", (change1, match_data["player1_id"]))
+    await db.execute("UPDATE users SET rating = rating - ? WHERE user_id = ?", (change2, match_data["player2_id"]))
+    return True
+
+
 async def add_match(reporter_id: int, player1_id: int, player1_name: str,
                     player2_id: int, player2_name: str,
                     score1: int, score2: int, char1: str = None, char2: str = None,
-                    rated: bool = True) -> dict:
-    """戦績をデータベースに登録する。rated=True の場合のみEloレーティング計算・更新を行う"""
+                    rated: bool = True, replace_match_id: int = None) -> dict:
+    """戦績をデータベースに登録する。rated=True の場合のみEloレーティング計算・更新を行う。
+    replace_match_id を指定すると、その戦績の削除（レート巻き戻し）と再登録を1つのトランザクションで行う"""
     # 双方のユーザーをDBに作成/更新
-    p1 = await get_or_create_user(player1_id, player1_name)
-    p2 = await get_or_create_user(player2_id, player2_name)
-
-    old_r1 = p1["rating"]
-    old_r2 = p2["rating"]
-
-    if rated:
-        # Eloレーティング期待値の計算
-        expected1 = 1.0 / (1.0 + 10.0 ** ((old_r2 - old_r1) / 400.0))
-        expected2 = 1.0 / (1.0 + 10.0 ** ((old_r1 - old_r2) / 400.0))
-
-        # 勝敗判定 (S1, S2)
-        if score1 > score2:
-            s1, s2 = 1.0, 0.0
-        elif score2 > score1:
-            s1, s2 = 0.0, 1.0
-        else:
-            s1, s2 = 0.5, 0.5
-
-        k_factor = 32.0
-        change1 = k_factor * (s1 - expected1)
-        change2 = k_factor * (s2 - expected2)
-
-        new_r1 = old_r1 + change1
-        new_r2 = old_r2 + change2
-    else:
-        # フリー対戦（レート変動なし）
-        change1, change2 = 0.0, 0.0
-        new_r1, new_r2 = old_r1, old_r2
+    await get_or_create_user(player1_id, player1_name)
+    await get_or_create_user(player2_id, player2_name)
 
     async with aiosqlite.connect(DB_PATH) as db:
-        # トランザクション処理
-        await db.execute("BEGIN TRANSACTION")
+        db.row_factory = aiosqlite.Row
+        # レートの読み取りから更新までを1つの書き込みトランザクションにまとめる（同時報告でのレート上書き防止）
+        await db.execute("BEGIN IMMEDIATE")
         try:
+            if replace_match_id is not None:
+                await _delete_match_in_tx(db, replace_match_id)
+
+            async with db.execute("SELECT rating FROM users WHERE user_id = ?", (player1_id,)) as cursor:
+                old_r1 = (await cursor.fetchone())["rating"]
+            async with db.execute("SELECT rating FROM users WHERE user_id = ?", (player2_id,)) as cursor:
+                old_r2 = (await cursor.fetchone())["rating"]
+
+            if rated:
+                # Eloレーティング期待値の計算
+                expected1 = 1.0 / (1.0 + 10.0 ** ((old_r2 - old_r1) / 400.0))
+                expected2 = 1.0 / (1.0 + 10.0 ** ((old_r1 - old_r2) / 400.0))
+
+                # 勝敗判定 (S1, S2)
+                if score1 > score2:
+                    s1, s2 = 1.0, 0.0
+                elif score2 > score1:
+                    s1, s2 = 0.0, 1.0
+                else:
+                    s1, s2 = 0.5, 0.5
+
+                k_factor = 32.0
+                change1 = k_factor * (s1 - expected1)
+                change2 = k_factor * (s2 - expected2)
+
+                new_r1 = old_r1 + change1
+                new_r2 = old_r2 + change2
+            else:
+                # フリー対戦（レート変動なし）
+                change1, change2 = 0.0, 0.0
+                new_r1, new_r2 = old_r1, old_r2
+
             cursor = await db.execute("""
                 INSERT INTO matches (reporter_id, player1_id, player2_id, score1, score2, char1, char2, rating_change1, rating_change2, is_rated)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -106,30 +130,15 @@ async def delete_match(match_id: int) -> bool:
     """指定されたIDの戦績を削除し、レーティング変動を巻き戻す。削除成功ならTrueを返す"""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT * FROM matches WHERE match_id = ?", (match_id,)) as cursor:
-            match_data = await cursor.fetchone()
-        if not match_data:
-            return False
-
-        p1_id = match_data["player1_id"]
-        p2_id = match_data["player2_id"]
-        change1 = match_data["rating_change1"] or 0.0
-        change2 = match_data["rating_change2"] or 0.0
-
-        await db.execute("BEGIN TRANSACTION")
+        await db.execute("BEGIN IMMEDIATE")
         try:
-            # マッチの削除
-            await db.execute("DELETE FROM matches WHERE match_id = ?", (match_id,))
-
-            # レーティングの巻き戻し (引く)
-            await db.execute("UPDATE users SET rating = rating - ? WHERE user_id = ?", (change1, p1_id))
-            await db.execute("UPDATE users SET rating = rating - ? WHERE user_id = ?", (change2, p2_id))
+            deleted = await _delete_match_in_tx(db, match_id)
             await db.commit()
         except Exception as e:
             await db.execute("ROLLBACK")
             raise e
 
-        return True
+        return deleted
 
 async def get_match(match_id: int):
     """指定されたIDの戦績を取得"""
@@ -158,6 +167,7 @@ async def get_user_stats(user_id: int, only_rated: bool = False) -> dict:
                 "total_matches": 0,
                 "wins": 0,
                 "losses": 0,
+                "draws": 0,
                 "win_rate": 0.0,
                 "recent_history": [],
                 "character_stats": {},
@@ -167,6 +177,7 @@ async def get_user_stats(user_id: int, only_rated: bool = False) -> dict:
         total_matches = len(rows)
         wins = 0
         losses = 0
+        draws = 0
 
         # キャラ別・対戦相手別の戦績集計用辞書
         char_stats = {}  # { char_name: { "wins": 0, "losses": 0, "played": 0 } }
@@ -181,12 +192,15 @@ async def get_user_stats(user_id: int, only_rated: bool = False) -> dict:
             opp_char = row["char2"] if is_p1 else row["char1"]
             opp_id = row["player2_id"] if is_p1 else row["player1_id"]
 
-            # 勝敗判定
+            # 勝敗判定（同点は引き分けとし、勝ちにも負けにも数えない）
             is_win = my_score > opp_score
+            is_loss = my_score < opp_score
             if is_win:
                 wins += 1
-            else:
+            elif is_loss:
                 losses += 1
+            else:
+                draws += 1
 
             # 直近履歴 (最大5件)
             if len(recent_history) < 5:
@@ -203,6 +217,7 @@ async def get_user_stats(user_id: int, only_rated: bool = False) -> dict:
                     "my_char": my_char,
                     "opponent_char": opp_char,
                     "is_win": is_win,
+                    "is_draw": not is_win and not is_loss,
                     "date": row["created_at"].split()[0] if row["created_at"] else ""
                 })
 
@@ -213,7 +228,7 @@ async def get_user_stats(user_id: int, only_rated: bool = False) -> dict:
                 char_stats[my_char]["played"] += 1
                 if is_win:
                     char_stats[my_char]["wins"] += 1
-                else:
+                elif is_loss:
                     char_stats[my_char]["losses"] += 1
 
             # 対戦相手別統計の更新
@@ -226,7 +241,7 @@ async def get_user_stats(user_id: int, only_rated: bool = False) -> dict:
             h2h_stats[opp_id]["played"] += 1
             if is_win:
                 h2h_stats[opp_id]["wins"] += 1
-            else:
+            elif is_loss:
                 h2h_stats[opp_id]["losses"] += 1
 
         win_rate = (wins / total_matches) * 100 if total_matches > 0 else 0.0
@@ -235,6 +250,7 @@ async def get_user_stats(user_id: int, only_rated: bool = False) -> dict:
             "total_matches": total_matches,
             "wins": wins,
             "losses": losses,
+            "draws": draws,
             "win_rate": round(win_rate, 1),
             "recent_history": recent_history,
             "character_stats": char_stats,
@@ -272,6 +288,7 @@ async def get_leaderboard(min_matches: int = 1) -> list:
                 SELECT
                     SUM(CASE WHEN player1_id = ? AND score1 > score2 THEN 1
                              WHEN player2_id = ? AND score2 > score1 THEN 1 ELSE 0 END) as wins,
+                    SUM(CASE WHEN score1 = score2 THEN 1 ELSE 0 END) as draws,
                     COUNT(*) as total
                 FROM matches
                 WHERE (player1_id = ? OR player2_id = ?) AND is_confirmed = 1
@@ -280,7 +297,8 @@ async def get_leaderboard(min_matches: int = 1) -> list:
 
             total = res["total"] or 0
             wins = res["wins"] or 0
-            losses = total - wins
+            # 引き分けは負けに数えない
+            losses = total - wins - (res["draws"] or 0)
 
             if total >= min_matches:
                 win_rate = (wins / total) * 100 if total > 0 else 0.0

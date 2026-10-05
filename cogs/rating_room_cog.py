@@ -17,6 +17,8 @@ BEST_OF = "2先 (2本先取)"
 
 # 結果報告・修正の「状態確認→戦績登録→状態更新」を直列化する（両者の同時送信による二重登録防止）
 _report_lock = asyncio.Lock()
+# キュー参加の「相手探し→キュー更新→スレッド作成」を直列化する（同じ待機者との二重マッチ防止）
+_queue_lock = asyncio.Lock()
 
 
 # ─────────────────────────────────────────────
@@ -93,7 +95,7 @@ async def _build_rating_stats_embed(member: discord.Member) -> discord.Embed:
         if stats["recent_history"]:
             lines = []
             for h in stats["recent_history"]:
-                icon = "✅" if h["is_win"] else "❌"
+                icon = "✅" if h["is_win"] else ("🤝" if h["is_draw"] else "❌")
                 lines.append(
                     f"{icon} vs {h['opponent_name']} `{h['my_score']}-{h['opponent_score']}`"
                 )
@@ -299,13 +301,7 @@ class RatingMatchReportModal(discord.ui.Modal):
                     )
                     return
 
-                if self.previous_match_id is not None:
-                    # 修正の場合、まず以前の登録を削除してレート変動を巻き戻してから登録し直す
-                    await db_manager.delete_match(self.previous_match_id)
-
-                old_rank1 = get_rank((await db_manager.get_or_create_user(self.player1.id, self.player1.display_name))["rating"])
-                old_rank2 = get_rank((await db_manager.get_or_create_user(self.player2.id, self.player2.display_name))["rating"])
-
+                # 修正の場合は、以前の登録の削除（レート巻き戻し）と再登録を1トランザクションで行う
                 result = await db_manager.add_match(
                     reporter_id=reporter.id,
                     player1_id=self.player1.id,
@@ -317,7 +313,10 @@ class RatingMatchReportModal(discord.ui.Modal):
                     char1=char1,
                     char2=char2,
                     rated=True,
+                    replace_match_id=self.previous_match_id,
                 )
+                old_rank1 = get_rank(result["old_rating1"])
+                old_rank2 = get_rank(result["old_rating2"])
                 await db_manager.update_rating_thread_status(self.thread_id, "completed")
                 await db_manager.update_rating_thread_match_id(self.thread_id, result["match_id"])
 
@@ -835,23 +834,34 @@ class RatingRoomCog(commands.Cog):
         await self._handle_queue_join(interaction)
 
     async def _handle_queue_join(self, interaction: discord.Interaction):
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "❌ このコマンドはサーバー内で実行してください。", ephemeral=True
+            )
+            return
+        # ロック待ちの間に応答期限（3秒）が切れないよう、先に応答を保留する
+        await interaction.response.defer(ephemeral=True)
+        async with _queue_lock:
+            await self._join_queue_or_match(interaction)
+
+    async def _join_queue_or_match(self, interaction: discord.Interaction):
         profile = await db_manager.get_rating_profile(interaction.user.id)
         if profile is None:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ 先に `/rating_register` でプロフィールを登録してください。", ephemeral=True
             )
             return
 
         settings = await db_manager.get_rating_settings(interaction.guild_id)
         if settings is None:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ このサーバーでは有頂天の塔が未設定です。管理者に `/setup_rating_room` の実行を依頼してください。",
                 ephemeral=True,
             )
             return
 
         if await _user_in_active_rating_thread(interaction.user.id):
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ すでに進行中のレーティング対戦があります。終了してから再度お試しください。",
                 ephemeral=True,
             )
@@ -859,13 +869,11 @@ class RatingRoomCog(commands.Cog):
 
         queue = await db_manager.get_rating_queue(interaction.guild_id)
         if any(q["user_id"] == interaction.user.id for q in queue):
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "⏳ すでにキューに参加しています。`/rating_queue_leave` でキャンセルできます。",
                 ephemeral=True,
             )
             return
-
-        await interaction.response.defer(ephemeral=True)
 
         user_info = await db_manager.get_or_create_user(interaction.user.id, interaction.user.display_name)
         rating = user_info["rating"]

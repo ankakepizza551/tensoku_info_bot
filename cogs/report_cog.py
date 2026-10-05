@@ -12,6 +12,9 @@ CHARACTERS = [
     "東風谷早苗", "チルノ", "紅美鈴", "霊烏路空", "洩矢諏訪子"
 ]
 
+# /report で入力できる勝利本数の上限（桁違いの入力ミスや水増しを防ぐ）
+MAX_SCORE = 99
+
 async def character_autocomplete(
     interaction: discord.Interaction,
     current: str,
@@ -47,8 +50,16 @@ class ReportCog(commands.Cog):
             await interaction.response.send_message("❌ 自分自身との戦績は報告できません！", ephemeral=True)
             return
             
+        if opponent.bot:
+            await interaction.response.send_message("❌ Botとの戦績は報告できません！", ephemeral=True)
+            return
+
         if my_score < 0 or opponent_score < 0:
             await interaction.response.send_message("❌ スコアに負の数値は入力できません！", ephemeral=True)
+            return
+
+        if my_score > MAX_SCORE or opponent_score > MAX_SCORE:
+            await interaction.response.send_message(f"❌ スコアは {MAX_SCORE} 以下で入力してください！", ephemeral=True)
             return
 
         # 自分の情報を取得/作成

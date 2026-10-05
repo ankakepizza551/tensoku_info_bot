@@ -50,7 +50,7 @@ async def _build_stats_embed(user: discord.Member) -> discord.Embed:
         if stats["recent_history"]:
             lines = []
             for h in stats["recent_history"]:
-                icon = "✅" if h["is_win"] else "❌"
+                icon = "✅" if h["is_win"] else ("🤝" if h["is_draw"] else "❌")
                 lines.append(
                     f"{icon} vs {h['opponent_name']} `{h['my_score']}-{h['opponent_score']}`"
                 )

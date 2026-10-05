@@ -42,7 +42,9 @@ class ThreadIndexCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    async def cog_load(self):
+    @commands.Cog.listener()
+    async def on_ready(self):
+        """接続前はチャンネルを取得できないため、起動・再接続が完了してからボードを同期する"""
         boards = await db_manager.get_all_thread_index_boards()
         for board in boards:
             await self._sync_board(board)

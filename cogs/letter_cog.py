@@ -34,6 +34,12 @@ def _build_letter_embed(
     return embed
 
 
+def _quote(text: str) -> str:
+    """引用表記にする。行頭の「> 」の分だけ長くなるので、Embedフィールドの上限(1024字)に収める"""
+    quoted = "\n".join(f"> {line}" for line in text.splitlines())
+    return quoted if len(quoted) <= 1024 else quoted[:1023] + "…"
+
+
 def _build_hidden_embed(letter_id: int) -> discord.Embed:
     embed = discord.Embed(
         title=f"📨 お便り No.{letter_id}",
@@ -135,8 +141,8 @@ class ReplyModal(discord.ui.Modal, title="💬 お便りに返信する"):
             color=discord.Color.from_rgb(88, 101, 242),
         )
         if self.show_quote:
-            quoted_title = "\n".join(f"> {line}" for line in self.letter["title"].splitlines())
-            quoted_body = "\n".join(f"> {line}" for line in self.letter["body"].splitlines())
+            quoted_title = _quote(self.letter["title"])
+            quoted_body = _quote(self.letter["body"])
             embed.add_field(name="引用（件名）", value=quoted_title, inline=False)
             embed.add_field(name="引用（内容）", value=quoted_body, inline=False)
         elif self.letter["is_hidden"]:
@@ -343,11 +349,8 @@ class LetterCog(commands.Cog):
                     title=f"📋 お便り No.{letter_id} 確認ログ",
                     color=discord.Color.from_rgb(231, 76, 60),
                 )
+                # 匿名性を保つため、ログには「誰が確認したか」だけを残し、送信者は載せない
                 log_embed.add_field(name="確認した管理者", value=f"{interaction.user.display_name}（{interaction.user}）", inline=False)
-                log_embed.add_field(name="送信者", value=sender_info, inline=False)
-                log_embed.add_field(name="タイトル", value=letter["title"], inline=False)
-                log_embed.add_field(name="本文", value=letter["body"], inline=False)
-                log_embed.add_field(name="送信日時", value=letter["created_at"], inline=False)
                 await admin_channel.send(embed=log_embed)
 
         logger.info(

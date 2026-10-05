@@ -132,7 +132,9 @@ async def bot_status(ctx):
     embed = discord.Embed(title="東方非想天則 戦績管理Bot ステータス", color=discord.Color.from_rgb(52, 152, 219))
     embed.add_field(name="接続中のサーバー数", value=str(len(bot.guilds)), inline=True)
     embed.add_field(name="応答速度 (Latency)", value=f"{round(bot.latency * 1000)}ms", inline=True)
-    embed.add_field(name="稼働中のCogs", value="\n".join(f"✅ {cog.replace('cogs.', '')}" for cog in COGS), inline=False)
+    embed.add_field(name="稼働中のCogs", value="\n".join(
+        f"{'✅' if cog in bot.extensions else '❌'} {cog.replace('cogs.', '')}" for cog in COGS
+    ), inline=False)
     await ctx.send(embed=embed)
 
 async def main():
