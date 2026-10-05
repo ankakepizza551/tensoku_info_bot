@@ -286,6 +286,7 @@ class LetterCog(commands.Cog):
 
     @app_commands.command(name="setup_letter_panel", description="お便りボタンをこのチャンネルに設置します（管理者用）")
     @app_commands.default_permissions(manage_guild=True)
+    @app_commands.guild_only()
     async def setup_letter_panel(self, interaction: discord.Interaction):
         embed = discord.Embed(
             title="📨 お便り",

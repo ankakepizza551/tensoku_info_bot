@@ -100,6 +100,7 @@ class ThreadIndexCog(commands.Cog):
         board_channel="一覧を表示するチャンネル（省略時は追跡対象と同じチャンネル）",
     )
     @app_commands.default_permissions(manage_guild=True)
+    @app_commands.guild_only()
     async def setup_thread_index(
         self,
         interaction: discord.Interaction,
@@ -155,6 +156,7 @@ class ThreadIndexCog(commands.Cog):
     )
     @app_commands.describe(channel="追跡を解除するチャンネル（省略時はこのチャンネル）")
     @app_commands.default_permissions(manage_guild=True)
+    @app_commands.guild_only()
     async def remove_thread_index(
         self,
         interaction: discord.Interaction,

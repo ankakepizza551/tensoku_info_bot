@@ -51,7 +51,12 @@ intents.members = True          # メンバー情報取得用
 intents.guild_messages = True   # スレッド内メッセージを含むギルドメッセージ
 
 # Botオブジェクトの作成
-bot = commands.Bot(command_prefix=config.PREFIX, intents=intents)
+# ユーザーが入力した文章をBotが送信しても @everyone / @here が飛ばないようにする
+bot = commands.Bot(
+    command_prefix=config.PREFIX,
+    intents=intents,
+    allowed_mentions=discord.AllowedMentions(everyone=False),
+)
 
 @bot.event
 async def on_ready():

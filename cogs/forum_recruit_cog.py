@@ -818,6 +818,7 @@ class ForumRecruitCog(commands.Cog):
         mention_role="通知時にメンションするロール（省略可）",
     )
     @app_commands.default_permissions(manage_guild=True)
+    @app_commands.guild_only()
     async def setup_recruit_panel(
         self,
         interaction: discord.Interaction,
@@ -869,6 +870,7 @@ class ForumRecruitCog(commands.Cog):
     )
     @app_commands.describe(message_id="削除するパネルのメッセージID")
     @app_commands.default_permissions(manage_guild=True)
+    @app_commands.guild_only()
     async def remove_recruit_panel(
         self,
         interaction: discord.Interaction,

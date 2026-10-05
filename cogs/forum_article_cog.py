@@ -622,6 +622,7 @@ class ForumArticleCog(commands.Cog):
     )
     @app_commands.describe(category="フォーラムを絞り込むカテゴリー（省略時は全フォーラムを表示）")
     @app_commands.default_permissions(manage_guild=True)
+    @app_commands.guild_only()
     async def setup_article_panel(
         self,
         interaction: discord.Interaction,
@@ -665,6 +666,7 @@ class ForumArticleCog(commands.Cog):
     )
     @app_commands.describe(message_id="削除するパネルのメッセージID")
     @app_commands.default_permissions(manage_guild=True)
+    @app_commands.guild_only()
     async def remove_article_panel(
         self,
         interaction: discord.Interaction,

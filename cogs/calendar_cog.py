@@ -356,6 +356,7 @@ class CalendarCog(commands.Cog):
     @app_commands.command(name="calendar_setup", description="カレンダーをチャンネルに設置します（管理者のみ）")
     @app_commands.describe(channel="設置するチャンネル（省略時は現在のチャンネル）")
     @app_commands.default_permissions(manage_guild=True)
+    @app_commands.guild_only()
     async def calendar_setup(
         self,
         interaction: discord.Interaction,
@@ -384,6 +385,7 @@ class CalendarCog(commands.Cog):
 
     @app_commands.command(name="setup_event_panel", description="イベント追加・削除パネルをこのチャンネルに設置します（管理者用）")
     @app_commands.default_permissions(manage_guild=True)
+    @app_commands.guild_only()
     async def setup_event_panel(self, interaction: discord.Interaction):
         embed = discord.Embed(
             title="📅 イベント管理",

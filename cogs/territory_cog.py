@@ -840,6 +840,7 @@ class TerritoryCog(commands.Cog):
     )
     @app_commands.describe(channel="設置するチャンネル（スレッドも指定可）")
     @app_commands.default_permissions(manage_guild=True)
+    @app_commands.guild_only()
     async def setup_territory_register_panel(
         self, interaction: discord.Interaction, channel: discord.TextChannel | discord.Thread
     ):
@@ -869,6 +870,7 @@ class TerritoryCog(commands.Cog):
     )
     @app_commands.describe(channel="設置するチャンネル（スレッドも指定可）")
     @app_commands.default_permissions(manage_guild=True)
+    @app_commands.guild_only()
     async def setup_territory_info_panel(
         self, interaction: discord.Interaction, channel: discord.TextChannel | discord.Thread
     ):
@@ -988,6 +990,7 @@ class TerritoryCog(commands.Cog):
         ]
     )
     @app_commands.default_permissions(manage_guild=True)
+    @app_commands.guild_only()
     async def territory_draw(
         self,
         interaction: discord.Interaction,
@@ -1472,6 +1475,7 @@ class TerritoryCog(commands.Cog):
         description="陣取りゲームの周回を進め、全員を再出場可能にします（管理者用）"
     )
     @app_commands.default_permissions(manage_guild=True)
+    @app_commands.guild_only()
     async def territory_new_round(self, interaction: discord.Interaction):
         guild_id = interaction.guild_id
         teams = await db_manager.get_territory_teams(guild_id)
@@ -1496,6 +1500,7 @@ class TerritoryCog(commands.Cog):
         description="陣取りゲームの大会終了を宣言し、最終結果を発表します（管理者用）"
     )
     @app_commands.default_permissions(manage_guild=True)
+    @app_commands.guild_only()
     async def territory_end(self, interaction: discord.Interaction):
         guild_id = interaction.guild_id
         rows = await db_manager.get_territory_teams(guild_id)
@@ -1560,6 +1565,7 @@ class TerritoryCog(commands.Cog):
     )
     @app_commands.describe(channel="設置するチャンネル（スレッドも指定可）")
     @app_commands.default_permissions(manage_guild=True)
+    @app_commands.guild_only()
     async def setup_territory_battle_panel(
         self, interaction: discord.Interaction, channel: discord.TextChannel | discord.Thread
     ):
@@ -1594,6 +1600,7 @@ class TerritoryCog(commands.Cog):
     )
     @app_commands.describe(category="使用するカテゴリ（省略時は新規作成）")
     @app_commands.default_permissions(manage_guild=True)
+    @app_commands.guild_only()
     async def territory_setup(
         self, interaction: discord.Interaction, category: discord.CategoryChannel = None
     ):
@@ -1846,6 +1853,7 @@ class TerritoryCog(commands.Cog):
         description="陣取りゲーム終了後のお片付け（チームロール・チャンネル削除+データリセット）を行います（管理者用）"
     )
     @app_commands.default_permissions(manage_guild=True)
+    @app_commands.guild_only()
     async def territory_cleanup(self, interaction: discord.Interaction):
         guild = interaction.guild
         team_role_rows = await db_manager.get_territory_team_roles(interaction.guild_id)

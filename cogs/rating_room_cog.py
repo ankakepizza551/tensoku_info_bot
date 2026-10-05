@@ -1050,6 +1050,7 @@ class RatingRoomCog(commands.Cog):
         mention_role="募集告知の際にメンションするロール（任意）",
     )
     @app_commands.default_permissions(manage_guild=True)
+    @app_commands.guild_only()
     async def setup_rating_room(
         self,
         interaction: discord.Interaction,
@@ -1092,6 +1093,7 @@ class RatingRoomCog(commands.Cog):
     )
     @app_commands.describe(channel="待機状況ボードを設置するチャンネル（スレッドも指定可）")
     @app_commands.default_permissions(manage_guild=True)
+    @app_commands.guild_only()
     async def setup_rating_queue_board(
         self, interaction: discord.Interaction, channel: discord.TextChannel | discord.Thread
     ):
@@ -1124,6 +1126,7 @@ class RatingRoomCog(commands.Cog):
     )
     @app_commands.describe(channel="操作パネルを設置するチャンネル（スレッドも指定可）")
     @app_commands.default_permissions(manage_guild=True)
+    @app_commands.guild_only()
     async def setup_rating_panel(
         self,
         interaction: discord.Interaction,
@@ -1163,6 +1166,7 @@ class RatingRoomCog(commands.Cog):
         description="レーティングのランクロール（天人/妖怪/人間 全9段階）を作成し、既存メンバーに付与します（管理者用）",
     )
     @app_commands.default_permissions(manage_guild=True)
+    @app_commands.guild_only()
     async def setup_rank_roles(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 

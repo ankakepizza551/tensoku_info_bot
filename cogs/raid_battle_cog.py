@@ -323,6 +323,7 @@ class RaidBattleCog(commands.Cog):
     )
     @app_commands.describe(category="使用するカテゴリ（省略時は新規作成）")
     @app_commands.default_permissions(manage_guild=True)
+    @app_commands.guild_only()
     async def setup_raid_battle(
         self, interaction: discord.Interaction, category: discord.CategoryChannel | None = None
     ):
@@ -442,6 +443,7 @@ class RaidBattleCog(commands.Cog):
     )
     @app_commands.describe(channel="設置するチャンネル（スレッドも指定可）")
     @app_commands.default_permissions(manage_guild=True)
+    @app_commands.guild_only()
     async def setup_raid_panel(
         self, interaction: discord.Interaction, channel: discord.TextChannel | discord.Thread
     ):
@@ -475,6 +477,7 @@ class RaidBattleCog(commands.Cog):
     )
     @app_commands.describe(channel="設置するチャンネル（スレッドも指定可）")
     @app_commands.default_permissions(manage_guild=True)
+    @app_commands.guild_only()
     async def setup_raid_status_board(
         self, interaction: discord.Interaction, channel: discord.TextChannel | discord.Thread
     ):
@@ -511,6 +514,7 @@ class RaidBattleCog(commands.Cog):
         description="現在登録されている初級者/上級者の一覧をコピペ用テキストで出力します（管理者用）",
     )
     @app_commands.default_permissions(manage_guild=True)
+    @app_commands.guild_only()
     async def raid_registered_list(self, interaction: discord.Interaction):
         guild = interaction.guild
         settings = await db_manager.get_raid_battle_settings(guild.id)
@@ -615,6 +619,7 @@ class RaidBattleCog(commands.Cog):
         description="レイドバトル終了後のお片付け（カテゴリ・チャンネル・ロールの削除+データリセット）を行います（管理者用）",
     )
     @app_commands.default_permissions(manage_guild=True)
+    @app_commands.guild_only()
     async def raid_cleanup(self, interaction: discord.Interaction):
         guild = interaction.guild
         settings = await db_manager.get_raid_battle_settings(guild.id) or {}

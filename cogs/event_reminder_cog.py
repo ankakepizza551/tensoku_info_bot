@@ -68,8 +68,13 @@ class EventReminderCog(commands.Cog):
         content = f"⏰ **リマインダー**\n{reminder['message']}"
         if reminder["role_id"]:
             content = f"<@&{reminder['role_id']}>\n{content}"
+        # 通知するロールは登録時に指定されたものだけにし、本文に書かれたロールメンションは飛ばさない
+        allowed_mentions = discord.AllowedMentions(
+            everyone=False,
+            roles=[discord.Object(id=reminder["role_id"])] if reminder["role_id"] else False,
+        )
         try:
-            await thread.send(content)
+            await thread.send(content, allowed_mentions=allowed_mentions)
         except discord.DiscordServerError as e:
             logger.warning(f"reminder送信失敗・次回再試行 (reminder_id={reminder_id}): {e}")
             return
@@ -115,6 +120,15 @@ class EventReminderCog(commands.Cog):
         if parsed <= datetime.datetime.now(JST):
             await interaction.response.send_message(
                 "❌ 日時は現在より未来を指定してください。", ephemeral=True
+            )
+            return
+
+        # Botの権限を借りて、本人がメンションできないロールへ通知を飛ばせないようにする
+        if role is not None and not (
+            role.mentionable or interaction.channel.permissions_for(interaction.user).mention_everyone
+        ):
+            await interaction.response.send_message(
+                f"❌ {role.mention} をメンションする権限がありません。", ephemeral=True
             )
             return
 
