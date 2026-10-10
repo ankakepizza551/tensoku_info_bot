@@ -2,9 +2,13 @@ import aiosqlite
 
 from ._common import DB_PATH
 
+_EVENT_EDITABLE_COLUMNS = ("date", "name", "type", "time", "location", "url", "hosted")
+
 __all__ = [
     "add_event",
     "get_events",
+    "get_event",
+    "update_event",
     "delete_event",
     "set_calendar_message",
     "get_calendar_message",
@@ -38,6 +42,31 @@ async def get_events(guild_id: int) -> list:
             (guild_id,)
         ) as cursor:
             return [dict(r) for r in await cursor.fetchall()]
+
+async def get_event(event_id: int, guild_id: int) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM events WHERE event_id = ? AND guild_id = ?",
+            (event_id, guild_id)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+async def update_event(event_id: int, guild_id: int, fields: dict) -> bool:
+    """fields に含まれる列だけを上書きする。date/name/time/location/url/type/hosted 以外は無視する"""
+    columns = [c for c in _EVENT_EDITABLE_COLUMNS if c in fields]
+    if not columns:
+        return False
+    set_clause = ", ".join(f"{c} = ?" for c in columns)
+    params = [fields[c] for c in columns] + [event_id, guild_id]
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            f"UPDATE events SET {set_clause} WHERE event_id = ? AND guild_id = ?",
+            params
+        )
+        await db.commit()
+        return cursor.rowcount > 0
 
 async def delete_event(event_id: int, guild_id: int) -> bool:
     async with aiosqlite.connect(DB_PATH) as db:

@@ -223,6 +223,144 @@ class AddEventModal(discord.ui.Modal):
 
 
 # ─────────────────────────────────────────────
+#  イベント編集モーダル
+# ─────────────────────────────────────────────
+
+class EditEventModal(discord.ui.Modal):
+    def __init__(self, event: dict):
+        self.event_id = event["event_id"]
+        self.guild_id = event["guild_id"]
+        icon = "🟢" if event["type"] == "online" else "🔴"
+        hosted_label = "外部" if event.get("hosted", "internal") == "external" else "コソ練"
+        super().__init__(title=f"{icon} イベントを編集（{hosted_label}）")
+
+        self.date_input = discord.ui.TextInput(
+            label="日付（必須）",
+            default=event["date"],
+            required=True,
+            max_length=10,
+        )
+        self.name_input = discord.ui.TextInput(
+            label="大会名（必須）",
+            default=event["name"],
+            required=True,
+            max_length=100,
+        )
+        self.time_input = discord.ui.TextInput(
+            label="開始時間（省略可）",
+            default=event["time"] or "",
+            required=False,
+            max_length=5,
+        )
+        self.location_input = discord.ui.TextInput(
+            label="場所（省略可）",
+            default=event["location"] or "",
+            required=False,
+            max_length=100,
+        )
+        self.url_input = discord.ui.TextInput(
+            label="詳細URL（省略可）",
+            default=event["url"] or "",
+            required=False,
+            max_length=200,
+        )
+        self.add_item(self.date_input)
+        self.add_item(self.name_input)
+        self.add_item(self.time_input)
+        self.add_item(self.location_input)
+        self.add_item(self.url_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        parsed_date = None
+        for fmt in ("%Y-%m-%d", "%Y/%m/%d"):
+            try:
+                parsed_date = datetime.datetime.strptime(self.date_input.value.strip(), fmt)
+                break
+            except ValueError:
+                continue
+        if not parsed_date:
+            await interaction.response.send_message(
+                "❌ 日付の形式が正しくありません。`YYYY-MM-DD` の形式で入力してください。", ephemeral=True
+            )
+            return
+
+        time_val = self.time_input.value.strip() or None
+        if time_val:
+            try:
+                datetime.datetime.strptime(time_val, "%H:%M")
+            except ValueError:
+                await interaction.response.send_message(
+                    "❌ 時間の形式が正しくありません。`HH:MM` の形式で入力してください。", ephemeral=True
+                )
+                return
+
+        date_str = parsed_date.strftime("%Y-%m-%d")
+        name = self.name_input.value.strip()
+        success = await db.update_event(self.event_id, self.guild_id, {
+            "date": date_str,
+            "name": name,
+            "time": time_val,
+            "location": self.location_input.value.strip() or None,
+            "url": self.url_input.value.strip() or None,
+        })
+        if not success:
+            await interaction.response.send_message(
+                "❌ 更新できませんでした。イベントが既に削除された可能性があります。", ephemeral=True
+            )
+            return
+
+        cog = interaction.client.cogs.get("CalendarCog")
+        if cog:
+            await cog._refresh_calendar(self.guild_id)
+
+        await interaction.response.send_message(
+            f"✅ **{date_str} {name}** を更新しました。", ephemeral=True
+        )
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
+        if not interaction.response.is_done():
+            await interaction.response.send_message("❌ エラーが発生しました。", ephemeral=True)
+
+
+# ─────────────────────────────────────────────
+#  イベント編集セレクトView
+# ─────────────────────────────────────────────
+
+class EditEventSelectView(discord.ui.View):
+    def __init__(self, events: list, guild_id: int):
+        super().__init__(timeout=60)
+        self.guild_id = guild_id
+        self.events_by_id = {e["event_id"]: e for e in events}
+
+        options = []
+        for e in events[:25]:
+            icon = "🟢" if e["type"] == "online" else "🔴"
+            hosted_tag = "" if e.get("hosted", "internal") == "internal" else "[外部] "
+            label = f"{hosted_tag}{e['date']} {e['name']}"
+            options.append(discord.SelectOption(
+                label=label[:100],
+                value=str(e["event_id"]),
+                emoji=icon,
+            ))
+
+        self._select = discord.ui.Select(
+            placeholder="編集するイベントを選択...",
+            options=options,
+        )
+        self._select.callback = self._select_callback
+        self.add_item(self._select)
+
+    async def _select_callback(self, interaction: discord.Interaction):
+        event_id = int(self._select.values[0])
+        event = self.events_by_id.get(event_id)
+        if not event:
+            await interaction.response.edit_message(content="❌ イベントが見つかりません。", view=None)
+            return
+        await interaction.response.send_modal(EditEventModal(event))
+        self.stop()
+
+
+# ─────────────────────────────────────────────
 #  イベント削除セレクトView
 # ─────────────────────────────────────────────
 
@@ -300,6 +438,14 @@ class CalendarManagePanelView(discord.ui.View):
         )
         add_offline_external.callback = self._make_add_callback("offline", "external")
 
+        edit = discord.ui.Button(
+            label="✏️ イベントを編集",
+            style=discord.ButtonStyle.primary,
+            custom_id="cal_edit",
+            row=1,
+        )
+        edit.callback = self._edit
+
         remove = discord.ui.Button(
             label="🗑️ イベントを削除",
             style=discord.ButtonStyle.secondary,
@@ -312,6 +458,7 @@ class CalendarManagePanelView(discord.ui.View):
         self.add_item(add_online_external)
         self.add_item(add_offline_internal)
         self.add_item(add_offline_external)
+        self.add_item(edit)
         self.add_item(remove)
 
     def _make_add_callback(self, event_type: str, hosted: str):
@@ -321,6 +468,21 @@ class CalendarManagePanelView(discord.ui.View):
                 return
             await interaction.response.send_modal(AddEventModal(event_type, hosted))
         return _callback
+
+    async def _edit(self, interaction: discord.Interaction):
+        if not _can_edit_calendar(interaction):
+            await _deny_calendar_edit(interaction)
+            return
+        events = await db.get_events(interaction.guild_id)
+        if not events:
+            await interaction.response.send_message(
+                "❌ 編集できるイベントがありません。", ephemeral=True
+            )
+            return
+        view = EditEventSelectView(events, interaction.guild_id)
+        await interaction.response.send_message(
+            "✏️ 編集するイベントを選択してください：", view=view, ephemeral=True
+        )
 
     async def _remove(self, interaction: discord.Interaction):
         if not _can_edit_calendar(interaction):
@@ -413,6 +575,8 @@ class CalendarCog(commands.Cog):
                 "🟢 **オン大会** / 🔴 **オフ大会** ×「コソ練主催」「外部」のボタンから選択\n"
                 "　→ 日付・大会名・時間・場所・URLを入力してカレンダーに追加\n"
                 "　（外部イベントはカレンダー上に 🌐 マークが付きます）\n\n"
+                "✏️ **イベントを編集**\n"
+                "　→ 登録済みイベントの一覧から選択して、日付・大会名・時間・場所・URLを修正\n\n"
                 "🗑️ **イベントを削除**\n"
                 "　→ 登録済みイベントの一覧から選択して削除"
             ),
@@ -493,6 +657,107 @@ class CalendarCog(commands.Cog):
             f"✅ **{date_str} {name}**（{hosted_label}）を追加しました。", ephemeral=True
         )
 
+    async def _event_choices(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[int]]:
+        events = await db.get_events(interaction.guild_id)
+        choices = []
+        for e in events:
+            hosted_tag = "" if e.get("hosted", "internal") == "internal" else "[外部] "
+            label = f"{hosted_tag}{e['date']} {e['name']}"
+            if current.lower() in label.lower():
+                choices.append(app_commands.Choice(name=label[:100], value=e["event_id"]))
+        return choices[:25]
+
+    @app_commands.command(name="edit_event", description="カレンダーのイベントを編集します（指定した項目だけ変更）")
+    @app_commands.describe(
+        event_id="編集するイベント（一覧から選択）",
+        date="日付（例: 2026-06-15 または 2026/06/15）省略可",
+        name="大会名 省略可",
+        type="種別 省略可",
+        hosted="主催 省略可",
+        time="開始時間（例: 14:00）省略可",
+        location="場所 省略可",
+        url="詳細URL 省略可",
+    )
+    @app_commands.choices(type=[
+        app_commands.Choice(name="オン大会 🟢", value="online"),
+        app_commands.Choice(name="オフ大会 🔴", value="offline"),
+    ])
+    @app_commands.choices(hosted=[
+        app_commands.Choice(name="コソ練主催", value="internal"),
+        app_commands.Choice(name="外部イベント 🌐", value="external"),
+    ])
+    async def edit_event(
+        self,
+        interaction: discord.Interaction,
+        event_id: int,
+        date: Optional[str] = None,
+        name: Optional[str] = None,
+        type: Optional[str] = None,
+        hosted: Optional[str] = None,
+        time: Optional[str] = None,
+        location: Optional[str] = None,
+        url: Optional[str] = None,
+    ):
+        if not _can_edit_calendar(interaction):
+            await _deny_calendar_edit(interaction)
+            return
+
+        fields: dict = {}
+        if date is not None:
+            parsed_date = None
+            for fmt in ("%Y-%m-%d", "%Y/%m/%d"):
+                try:
+                    parsed_date = datetime.datetime.strptime(date, fmt)
+                    break
+                except ValueError:
+                    continue
+            if not parsed_date:
+                await interaction.response.send_message(
+                    "❌ 日付の形式が正しくありません。`YYYY-MM-DD` の形式で入力してください。", ephemeral=True
+                )
+                return
+            fields["date"] = parsed_date.strftime("%Y-%m-%d")
+        if time is not None:
+            try:
+                datetime.datetime.strptime(time, "%H:%M")
+            except ValueError:
+                await interaction.response.send_message(
+                    "❌ 時間の形式が正しくありません。`HH:MM` の形式で入力してください。", ephemeral=True
+                )
+                return
+            fields["time"] = time
+        if name is not None:
+            fields["name"] = name
+        if type is not None:
+            fields["type"] = type
+        if hosted is not None:
+            fields["hosted"] = hosted
+        if location is not None:
+            fields["location"] = location
+        if url is not None:
+            fields["url"] = url
+
+        if not fields:
+            await interaction.response.send_message(
+                "❌ 変更する項目を1つ以上指定してください。", ephemeral=True
+            )
+            return
+
+        success = await db.update_event(event_id, interaction.guild_id, fields)
+        if not success:
+            await interaction.response.send_message(
+                "❌ 指定されたイベントが見つかりません。", ephemeral=True
+            )
+            return
+        await self._refresh_calendar(interaction.guild_id)
+        await interaction.response.send_message("✅ イベントを更新しました。", ephemeral=True)
+
+    @edit_event.autocomplete("event_id")
+    async def edit_event_autocomplete(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[int]]:
+        return await self._event_choices(interaction, current)
+
     @app_commands.command(name="remove_event", description="カレンダーからイベントを削除します")
     @app_commands.describe(event_id="削除するイベント（一覧から選択）")
     async def remove_event(self, interaction: discord.Interaction, event_id: int):
@@ -512,13 +777,7 @@ class CalendarCog(commands.Cog):
     async def remove_event_autocomplete(
         self, interaction: discord.Interaction, current: str
     ) -> list[app_commands.Choice[int]]:
-        events = await db.get_events(interaction.guild_id)
-        choices = []
-        for e in events:
-            hosted_tag = "" if e.get("hosted", "internal") == "internal" else "[外部] "
-            label = f"{hosted_tag}{e['date']} {e['name']}"
-            if current.lower() in label.lower():
-                choices.append(app_commands.Choice(name=label[:100], value=e["event_id"]))
+        return await self._event_choices(interaction, current)
         return choices[:25]
 
 
