@@ -318,6 +318,12 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # events テーブルに hosted（コソ練主催 internal / 外部イベント external）が存在しない場合は追加
+        async with db.execute("PRAGMA table_info(events)") as cursor:
+            events_columns = [row[1] for row in await cursor.fetchall()]
+        if "hosted" not in events_columns:
+            await db.execute("ALTER TABLE events ADD COLUMN hosted TEXT NOT NULL DEFAULT 'internal'")
+            await db.commit()
         # カレンダーメッセージ管理テーブル
         await db.execute("""
             CREATE TABLE IF NOT EXISTS calendar_messages (

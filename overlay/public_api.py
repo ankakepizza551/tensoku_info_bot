@@ -83,6 +83,7 @@ async def handle_events(request: web.Request) -> web.Response:
             "time": e["time"] or "",
             "location": e["location"] or "",
             "url": e["url"] or "",
+            "hosted": e["hosted"] or "internal",
         }
         for e in events
     ]

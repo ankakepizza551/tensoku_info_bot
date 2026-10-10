@@ -45,10 +45,11 @@ def build_calendar_embed(year: int, month: int, events: list) -> discord.Embed:
         dt = datetime.datetime.strptime(e["date"], "%Y-%m-%d")
         wd = WEEKDAYS_JP[dt.weekday()]
         icon = "🟢" if e["type"] == "online" else "🔴"
+        hosted_tag = "" if e.get("hosted", "internal") == "internal" else "🌐 "
         line = f"{icon} **{month}/{dt.day}({wd})"
         if e["time"]:
             line += f" {e['time']}"
-        line += f"** {e['name']}"
+        line += f"** {hosted_tag}{e['name']}"
         if e["location"]:
             line += f"\n　📍 {e['location']}"
         if e["url"]:
@@ -126,10 +127,13 @@ class CalendarView(discord.ui.View):
 # ─────────────────────────────────────────────
 
 class AddEventModal(discord.ui.Modal):
-    def __init__(self, event_type: str):
+    def __init__(self, event_type: str, hosted: str = "internal"):
         label = "🟢 オン大会を追加" if event_type == "online" else "🔴 オフ大会を追加"
+        if hosted == "external":
+            label += "（外部）"
         super().__init__(title=label)
         self.event_type = event_type
+        self.hosted = hosted
 
         self.date_input = discord.ui.TextInput(
             label="日付（必須）",
@@ -200,6 +204,7 @@ class AddEventModal(discord.ui.Modal):
             time=time_val,
             location=self.location_input.value.strip() or None,
             url=self.url_input.value.strip() or None,
+            hosted=self.hosted,
         )
 
         cog = interaction.client.cogs.get("CalendarCog")
@@ -207,8 +212,9 @@ class AddEventModal(discord.ui.Modal):
             await cog._refresh_calendar(interaction.guild_id)
 
         icon = "🟢" if self.event_type == "online" else "🔴"
+        hosted_label = "外部イベント" if self.hosted == "external" else "コソ練主催"
         await interaction.response.send_message(
-            f"✅ {icon} **{date_str} {self.name_input.value.strip()}** を追加しました。", ephemeral=True
+            f"✅ {icon} **{date_str} {self.name_input.value.strip()}**（{hosted_label}）を追加しました。", ephemeral=True
         )
 
     async def on_error(self, interaction: discord.Interaction, error: Exception):
@@ -228,7 +234,8 @@ class RemoveEventSelectView(discord.ui.View):
         options = []
         for e in events[:25]:
             icon = "🟢" if e["type"] == "online" else "🔴"
-            label = f"{e['date']} {e['name']}"
+            hosted_tag = "" if e.get("hosted", "internal") == "internal" else "[外部] "
+            label = f"{hosted_tag}{e['date']} {e['name']}"
             options.append(discord.SelectOption(
                 label=label[:100],
                 value=str(e["event_id"]),
@@ -265,42 +272,55 @@ class CalendarManagePanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-        add_online = discord.ui.Button(
-            label="🟢 オン大会を追加",
+        add_online_internal = discord.ui.Button(
+            label="🟢 オン(コソ練)",
             style=discord.ButtonStyle.success,
-            custom_id="cal_add_online",
+            custom_id="cal_add_online_internal",
         )
-        add_online.callback = self._add_online
+        add_online_internal.callback = self._make_add_callback("online", "internal")
 
-        add_offline = discord.ui.Button(
-            label="🔴 オフ大会を追加",
-            style=discord.ButtonStyle.danger,
-            custom_id="cal_add_offline",
+        add_online_external = discord.ui.Button(
+            label="🟢 オン(外部)",
+            style=discord.ButtonStyle.primary,
+            custom_id="cal_add_online_external",
         )
-        add_offline.callback = self._add_offline
+        add_online_external.callback = self._make_add_callback("online", "external")
+
+        add_offline_internal = discord.ui.Button(
+            label="🔴 オフ(コソ練)",
+            style=discord.ButtonStyle.danger,
+            custom_id="cal_add_offline_internal",
+        )
+        add_offline_internal.callback = self._make_add_callback("offline", "internal")
+
+        add_offline_external = discord.ui.Button(
+            label="🔴 オフ(外部)",
+            style=discord.ButtonStyle.secondary,
+            custom_id="cal_add_offline_external",
+        )
+        add_offline_external.callback = self._make_add_callback("offline", "external")
 
         remove = discord.ui.Button(
             label="🗑️ イベントを削除",
             style=discord.ButtonStyle.secondary,
             custom_id="cal_remove",
+            row=1,
         )
         remove.callback = self._remove
 
-        self.add_item(add_online)
-        self.add_item(add_offline)
+        self.add_item(add_online_internal)
+        self.add_item(add_online_external)
+        self.add_item(add_offline_internal)
+        self.add_item(add_offline_external)
         self.add_item(remove)
 
-    async def _add_online(self, interaction: discord.Interaction):
-        if not _can_edit_calendar(interaction):
-            await _deny_calendar_edit(interaction)
-            return
-        await interaction.response.send_modal(AddEventModal("online"))
-
-    async def _add_offline(self, interaction: discord.Interaction):
-        if not _can_edit_calendar(interaction):
-            await _deny_calendar_edit(interaction)
-            return
-        await interaction.response.send_modal(AddEventModal("offline"))
+    def _make_add_callback(self, event_type: str, hosted: str):
+        async def _callback(interaction: discord.Interaction):
+            if not _can_edit_calendar(interaction):
+                await _deny_calendar_edit(interaction)
+                return
+            await interaction.response.send_modal(AddEventModal(event_type, hosted))
+        return _callback
 
     async def _remove(self, interaction: discord.Interaction):
         if not _can_edit_calendar(interaction):
@@ -390,8 +410,9 @@ class CalendarCog(commands.Cog):
         embed = discord.Embed(
             title="📅 イベント管理",
             description=(
-                "🟢 **オン大会を追加** / 🔴 **オフ大会を追加**\n"
-                "　→ 日付・大会名・時間・場所・URLを入力してカレンダーに追加\n\n"
+                "🟢 **オン大会** / 🔴 **オフ大会** ×「コソ練主催」「外部」のボタンから選択\n"
+                "　→ 日付・大会名・時間・場所・URLを入力してカレンダーに追加\n"
+                "　（外部イベントはカレンダー上に 🌐 マークが付きます）\n\n"
                 "🗑️ **イベントを削除**\n"
                 "　→ 登録済みイベントの一覧から選択して削除"
             ),
@@ -405,6 +426,7 @@ class CalendarCog(commands.Cog):
         date="日付（例: 2026-06-15 または 2026/06/15）",
         name="大会名",
         type="種別",
+        hosted="主催（省略時はコソ練主催）",
         time="開始時間（例: 14:00）省略可",
         location="場所 省略可",
         url="詳細URL 省略可",
@@ -413,12 +435,17 @@ class CalendarCog(commands.Cog):
         app_commands.Choice(name="オン大会 🟢", value="online"),
         app_commands.Choice(name="オフ大会 🔴", value="offline"),
     ])
+    @app_commands.choices(hosted=[
+        app_commands.Choice(name="コソ練主催", value="internal"),
+        app_commands.Choice(name="外部イベント 🌐", value="external"),
+    ])
     async def add_event(
         self,
         interaction: discord.Interaction,
         date: str,
         name: str,
         type: str,
+        hosted: Optional[str] = "internal",
         time: Optional[str] = None,
         location: Optional[str] = None,
         url: Optional[str] = None,
@@ -458,10 +485,12 @@ class CalendarCog(commands.Cog):
             time=time,
             location=location,
             url=url,
+            hosted=hosted or "internal",
         )
         await self._refresh_calendar(interaction.guild_id)
+        hosted_label = "外部イベント" if hosted == "external" else "コソ練主催"
         await interaction.response.send_message(
-            f"✅ **{date_str} {name}** を追加しました。", ephemeral=True
+            f"✅ **{date_str} {name}**（{hosted_label}）を追加しました。", ephemeral=True
         )
 
     @app_commands.command(name="remove_event", description="カレンダーからイベントを削除します")
@@ -486,7 +515,8 @@ class CalendarCog(commands.Cog):
         events = await db.get_events(interaction.guild_id)
         choices = []
         for e in events:
-            label = f"{e['date']} {e['name']}"
+            hosted_tag = "" if e.get("hosted", "internal") == "internal" else "[外部] "
+            label = f"{hosted_tag}{e['date']} {e['name']}"
             if current.lower() in label.lower():
                 choices.append(app_commands.Choice(name=label[:100], value=e["event_id"]))
         return choices[:25]

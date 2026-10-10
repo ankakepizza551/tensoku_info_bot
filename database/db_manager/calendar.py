@@ -13,11 +13,20 @@ __all__ = [
 ]
 
 
-async def add_event(guild_id: int, date: str, name: str, type: str, time: str | None, location: str | None, url: str | None) -> None:
+async def add_event(
+    guild_id: int,
+    date: str,
+    name: str,
+    type: str,
+    time: str | None,
+    location: str | None,
+    url: str | None,
+    hosted: str = "internal",
+) -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "INSERT INTO events (guild_id, date, name, type, time, location, url) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (guild_id, date, name, type, time, location, url)
+            "INSERT INTO events (guild_id, date, name, type, time, location, url, hosted) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (guild_id, date, name, type, time, location, url, hosted)
         )
         await db.commit()
 

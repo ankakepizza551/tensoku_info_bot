@@ -27,7 +27,7 @@ async def get_main_character_counts() -> list[tuple[str, int]]:
 
 async def get_public_events(guild_id: int | None = None) -> list[dict]:
     """公開カレンダー用の予定一覧を日付順に返す。guild_id を指定するとそのサーバーだけに絞る"""
-    query = "SELECT event_id, date, name, type, time, location, url FROM events"
+    query = "SELECT event_id, date, name, type, time, location, url, hosted FROM events"
     params: tuple = ()
     if guild_id:
         query += " WHERE guild_id = ?"
