@@ -20,6 +20,10 @@ TEAM_ROLE_COLORS = [
 ]
 PARTICIPANT_ROLE_NAME = "陣取り参加者"
 CAPTAIN_STRENGTH = 5
+CAPTAIN_DEFEAT_BONUS = 2
+# 少人数開催では盤面が小さく、大将戦1回で陣地が大きく動きすぎるため大将撃破・下剋上ボーナスを軽減する
+SMALL_EVENT_CAPTAIN_DEFEAT_BONUS = 1
+SMALL_EVENT_UPSET_BONUS_MAX = 2
 
 
 def _neighbors(idx: int, side: int) -> list:
@@ -1377,7 +1381,8 @@ class TerritoryCog(commands.Cog):
         current_round = await db_manager.get_territory_current_round(guild_id)
         fought = await db_manager.get_territory_fought_user_ids(guild_id, current_round)
         fight_counts = await db_manager.get_territory_round_fight_counts(guild_id, current_round)
-        limits = _round_fight_limits(await db_manager.get_territory_teams(guild_id))
+        team_rows = await db_manager.get_territory_teams(guild_id)
+        limits = _round_fight_limits(team_rows)
         reporter_limit = limits.get(reporter.id, 1)
         opponent_limit = limits.get(opponent.id, 1)
         if fight_counts.get(reporter.id, 0) >= reporter_limit:
@@ -1409,7 +1414,12 @@ class TerritoryCog(commands.Cog):
         base = loser_strength
         bonus = max(0, loser_strength - winner_strength)
         captain_defeated = bool(loser_team["is_captain"])
-        invasion = base + bonus + (2 if captain_defeated else 0)
+        n_teams = max(r["team_index"] for r in team_rows) + 1
+        captain_bonus = CAPTAIN_DEFEAT_BONUS
+        if db_manager.is_small_territory_event(n_teams, len(team_rows)):
+            captain_bonus = SMALL_EVENT_CAPTAIN_DEFEAT_BONUS
+            bonus = min(bonus, SMALL_EVENT_UPSET_BONUS_MAX)
+        invasion = base + bonus + (captain_bonus if captain_defeated else 0)
 
         match_id = await db_manager.add_territory_match(
             guild_id=guild_id,
@@ -1427,7 +1437,7 @@ class TerritoryCog(commands.Cog):
         if bonus > 0:
             bonus_parts.append(f"下剋上ボーナス +{bonus}")
         if captain_defeated:
-            bonus_parts.append("大将撃破ボーナス +2")
+            bonus_parts.append(f"大将撃破ボーナス +{captain_bonus}")
 
         embed = discord.Embed(
             title="⚔️ 陣取りゲーム 対戦結果",
