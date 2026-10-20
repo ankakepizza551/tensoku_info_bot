@@ -476,6 +476,14 @@ class TerritoryInfoPanelView(discord.ui.View):
         teams_btn.callback = self._teams_callback
         self.add_item(teams_btn)
 
+        rules_btn = discord.ui.Button(
+            label="📖 ルール説明",
+            style=discord.ButtonStyle.secondary,
+            custom_id="territory_panel:rules",
+        )
+        rules_btn.callback = self._rules_callback
+        self.add_item(rules_btn)
+
     async def _profile_callback(self, interaction: discord.Interaction):
         embed = await self.cog._build_profile_embed(interaction.user)
         if embed is None:
@@ -492,6 +500,10 @@ class TerritoryInfoPanelView(discord.ui.View):
             await interaction.response.send_message("まだ誰も登録していません。", ephemeral=True)
             return
         await interaction.response.send_message(embed=embed)
+
+    async def _rules_callback(self, interaction: discord.Interaction):
+        embed = await self.cog._build_rules_embed(interaction.guild_id)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     async def _teams_callback(self, interaction: discord.Interaction):
         embed = await self.cog._build_current_teams_embed(interaction.guild_id)
@@ -967,7 +979,7 @@ class TerritoryCog(commands.Cog):
 
     @app_commands.command(
         name="setup_territory_info_panel",
-        description="陣取りゲームの情報確認パネル（プロフィール・登録者一覧・チーム分け）をこのチャンネルに設置します（管理者用）"
+        description="陣取りゲームの情報確認パネル（プロフィール・登録者一覧・チーム分け・ルール説明）をこのチャンネルに設置します（管理者用）"
     )
     @app_commands.describe(channel="設置するチャンネル（スレッドも指定可）")
     @app_commands.default_permissions(manage_guild=True)
@@ -980,7 +992,8 @@ class TerritoryCog(commands.Cog):
             description=(
                 "・👤 自分のプロフィール確認\n"
                 "・📋 登録者一覧\n"
-                "・🗂️ チーム分け結果"
+                "・🗂️ チーム分け結果\n"
+                "・📖 ルール説明"
             ),
             color=discord.Color.from_rgb(52, 152, 219),
         )
@@ -1289,6 +1302,110 @@ class TerritoryCog(commands.Cog):
             )
             return
         await interaction.response.send_message(embed=embed)
+
+    # ── ルール説明 ────────────────────────────────────────────────
+
+    async def _build_rules_embed(self, guild_id: int) -> discord.Embed:
+        """ルール説明のEmbedを作る。チーム分け済みなら、その大会の人数・盤面・周回数に合わせた内容にする"""
+        rows = await db_manager.get_territory_teams(guild_id)
+        drawn = bool(rows)
+        small_max = db_manager.SMALL_GRID_MAX_PARTICIPANTS[2]
+
+        if drawn:
+            n_teams = max(r["team_index"] for r in rows) + 1
+            small = db_manager.is_small_territory_event(n_teams, len(rows))
+            grid = await db_manager.get_territory_grid(guild_id)
+            side = int(round(len(grid) ** 0.5)) if grid else db_manager.grid_side_for_team_count(n_teams, len(rows))
+            total_rounds = await db_manager.get_territory_total_rounds(guild_id)
+            size_label = "少人数ルール" if small else "通常ルール"
+            description = (
+                f"この大会: **{n_teams}チーム・{len(rows)}人**（{size_label}）／ 陣地マップ **{side}×{side}**"
+                + (f" ／ **全{total_rounds}周**" if total_rounds else "")
+            )
+            upper_captain = SMALL_EVENT_CAPTAIN_STRENGTH if small else CAPTAIN_STRENGTH
+            captain_bonus = SMALL_EVENT_CAPTAIN_DEFEAT_BONUS if small else CAPTAIN_DEFEAT_BONUS
+            upset_rule = f"最大+{SMALL_EVENT_UPSET_BONUS_MAX}" if small else "上限なし"
+        else:
+            description = (
+                "まだチーム分け前のため、一般的なルールを表示しています。\n"
+                f"2チーム戦で参加者が{small_max}人以下のときは **少人数ルール**（[ ]内の値）になります。"
+            )
+            upper_captain = f"{CAPTAIN_STRENGTH} [{SMALL_EVENT_CAPTAIN_STRENGTH}]"
+            captain_bonus = f"{CAPTAIN_DEFEAT_BONUS} [+{SMALL_EVENT_CAPTAIN_DEFEAT_BONUS}]"
+            upset_rule = f"上限なし [最大+{SMALL_EVENT_UPSET_BONUS_MAX}]"
+            total_rounds = None
+
+        embed = discord.Embed(
+            title="📖 陣取りゲーム ルール説明",
+            description=description,
+            color=discord.Color.from_rgb(52, 152, 219),
+        )
+        embed.add_field(
+            name="📝 流れ",
+            value=(
+                "1. 登録パネルから強さ（初級1・中級2・上級3）を登録\n"
+                "2. 管理者がチーム分け（各チームに大将が1人）\n"
+                "3. 別チームの人と1対1で対戦し、対戦パネルから結果を報告\n"
+                "4. 勝ったチームが侵略度の数だけ陣地を広げる"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="👑 大将",
+            value=(
+                "各チームで最も強い1人（上級者が足りなければ中級者・初級者から）。\n"
+                f"大将の強さは、上級者なら **{upper_captain}**、中級者・初級者なら本人の強さのまま。"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="⚔️ 侵略度（1勝で広げられるマス数）",
+            value=(
+                "**負けた人の強さ** ＋ **下剋上ボーナス** ＋ **大将撃破ボーナス**\n"
+                f"・下剋上ボーナス: 格上に勝つと強さの差だけ加算（{upset_rule}）\n"
+                f"・大将撃破ボーナス: 大将に勝つと +{captain_bonus}"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="🗺️ 陣地",
+            value=(
+                "自チームの陣地に隣接するマスだけ塗り替えられます。\n"
+                f"開始時は各チーム同じマス数で、中央の1マス（{NEUTRAL_EMOJI}）だけがどのチームにも属さない中立マスです。"
+            ),
+            inline=False,
+        )
+        if total_rounds:
+            round_rule = f"全{total_rounds}周。対戦がすべて終わると自動で次の周へ進み、最終周の後に結果を発表します。"
+        else:
+            round_rule = "周回は管理者が進めます。"
+        embed.add_field(
+            name="🔁 出場",
+            value=(
+                "1周につき1人1回まで。チームの人数に差があるときは、少ないチームの人が複数回出場できます。\n"
+                "同じ相手とは1周に1回まで。\n"
+                + round_rule
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="🏆 勝敗",
+            value=(
+                "最後に **陣地のマス数が最も多いチーム** が優勝。\n"
+                "同数なら中央マスを持つチーム、それでも決まらなければ侵略度の合計で決めます。"
+            ),
+            inline=False,
+        )
+        return embed
+
+    @app_commands.command(
+        name="territory_rules",
+        description="陣取りゲームのルール説明を表示します（自分だけに表示）"
+    )
+    @app_commands.guild_only()
+    async def territory_rules(self, interaction: discord.Interaction):
+        embed = await self._build_rules_embed(interaction.guild_id)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # ── 陣地マップ ────────────────────────────────────────────────
 
@@ -1889,7 +2006,8 @@ class TerritoryCog(commands.Cog):
                 description=(
                     "・👤 自分のプロフィール確認\n"
                     "・📋 登録者一覧\n"
-                    "・🗂️ チーム分け結果"
+                    "・🗂️ チーム分け結果\n"
+                    "・📖 ルール説明"
                 ),
                 color=discord.Color.from_rgb(52, 152, 219),
             )
