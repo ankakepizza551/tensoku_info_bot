@@ -12,6 +12,7 @@ logger = logging.getLogger("TensokuMatchBot")
 STRENGTH_LABELS = {1: "初級者", 2: "中級者", 3: "上級者"}
 TEAM_LABELS = ["Aチーム", "Bチーム", "Cチーム", "Dチーム"]
 TEAM_EMOJIS = ["🟥", "🟦", "🟨", "🟩"]
+NEUTRAL_EMOJI = "⬜"
 TEAM_ROLE_COLORS = [
     discord.Color.from_rgb(231, 76, 60),   # A: 赤
     discord.Color.from_rgb(52, 152, 219),  # B: 青
@@ -69,6 +70,35 @@ def _captain_strength(profile_strength: int, small_event: bool = False) -> int:
     if profile_strength != 3:
         return profile_strength
     return SMALL_EVENT_CAPTAIN_STRENGTH if small_event else CAPTAIN_STRENGTH
+
+
+def _decide_winners(grid: list, n_teams: int, invasion_totals: dict) -> tuple:
+    """陣地マップのマス数で優勝チームを決める。
+    同数なら中央マスを持つチーム、それでも決まらなければ侵略度合計で比べる。
+    (優勝チームindexのリスト, チームごとのマス数, 決め手の説明) を返す"""
+    counts = [0] * n_teams
+    for g in grid:
+        if g["team_index"] != db_manager.NEUTRAL_CELL:
+            counts[g["team_index"]] += 1
+    if not grid:
+        # マップ未初期化（旧チーム分けなど）の場合は侵略度合計のみで決める
+        best = max(invasion_totals.get(i, 0) for i in range(n_teams))
+        return [i for i in range(n_teams) if invasion_totals.get(i, 0) == best], counts, "侵略度合計"
+
+    best = max(counts)
+    tied = [i for i in range(n_teams) if counts[i] == best]
+    if len(tied) == 1:
+        return tied, counts, "陣地のマス数"
+
+    side = int(round(len(grid) ** 0.5))
+    center_index = (side // 2) * side + side // 2
+    center_owner = next((g["team_index"] for g in grid if g["cell_index"] == center_index), None)
+    if center_owner in tied:
+        return [center_owner], counts, "陣地のマス数が同数のため、中央マスの所有"
+
+    best_inv = max(invasion_totals.get(i, 0) for i in tied)
+    winners = [i for i in tied if invasion_totals.get(i, 0) == best_inv]
+    return winners, counts, "陣地のマス数が同数のため、侵略度合計"
 
 
 def _strength_label(team_row: dict) -> str:
@@ -1243,22 +1273,31 @@ class TerritoryCog(commands.Cog):
         side = int(round(len(grid) ** 0.5))
 
         rows_lines = [
-            " ".join(TEAM_EMOJIS[owner_map[r * side + c]] for c in range(side))
+            " ".join(
+                NEUTRAL_EMOJI if owner_map[r * side + c] == db_manager.NEUTRAL_CELL
+                else TEAM_EMOJIS[owner_map[r * side + c]]
+                for c in range(side)
+            )
             for r in range(side)
         ]
 
         counts = [0] * n_teams
+        neutral = 0
         for v in owner_map.values():
-            counts[v] += 1
+            if v == db_manager.NEUTRAL_CELL:
+                neutral += 1
+            else:
+                counts[v] += 1
 
         embed = discord.Embed(
             title=f"🗺️ 陣取りゲーム 陣地マップ ({side}×{side})",
             description="\n".join(rows_lines),
             color=discord.Color.from_rgb(52, 152, 219),
         )
-        embed.set_footer(
-            text=" / ".join(f"{TEAM_LABELS[i]} {counts[i]}マス" for i in range(n_teams))
-        )
+        footer = " / ".join(f"{TEAM_LABELS[i]} {counts[i]}マス" for i in range(n_teams))
+        if neutral:
+            footer += f" / 中立 {neutral}マス"
+        embed.set_footer(text=footer)
         return embed
 
     async def _expand_territory(
@@ -1324,6 +1363,9 @@ class TerritoryCog(commands.Cog):
 
         n_teams = max(r["team_index"] for r in rows) + 1
         totals = await db_manager.get_territory_invasion_totals(guild_id)
+        cell_counts = {}
+        for g in await db_manager.get_territory_grid(guild_id):
+            cell_counts[g["team_index"]] = cell_counts.get(g["team_index"], 0) + 1
         current_round = await db_manager.get_territory_current_round(guild_id)
         fought = await db_manager.get_territory_fought_user_ids(guild_id, current_round)
         fight_counts = await db_manager.get_territory_round_fight_counts(guild_id, current_round)
@@ -1341,7 +1383,7 @@ class TerritoryCog(commands.Cog):
             score = totals.get(i, 0)
             remaining = [m["username"] for m in members if m["user_id"] not in fought]
             done = len(members) - len(remaining)
-            value = f"侵略度合計: **{score}**\n出場済み: {done}/{len(members)}人"
+            value = f"陣地: **{cell_counts.get(i, 0)}マス**\n侵略度合計: {score}\n出場済み: {done}/{len(members)}人"
             team_limit = limits.get(members[0]["user_id"], 1) if members else 1
             if team_limit > 1:
                 # 少人数側のチームは複数回出場できるため、残り回数がある人を示す
@@ -1540,7 +1582,7 @@ class TerritoryCog(commands.Cog):
 
     @app_commands.command(
         name="territory_score",
-        description="陣取りゲームの現在の戦況（侵略度・出場状況）を表示します"
+        description="陣取りゲームの現在の戦況（陣地のマス数・侵略度・出場状況）を表示します"
     )
     async def territory_score(self, interaction: discord.Interaction):
         embed = await self._build_score_embed(interaction.guild_id)
@@ -1594,16 +1636,26 @@ class TerritoryCog(commands.Cog):
             return
 
         totals = await db_manager.get_territory_invasion_totals(guild_id)
+        grid = await db_manager.get_territory_grid(guild_id)
         n_teams = max(r["team_index"] for r in rows) + 1
-        lines = [f"{TEAM_LABELS[i]}: 侵略度 **{totals.get(i, 0)}**" for i in range(n_teams)]
-        best_score = max(totals.get(i, 0) for i in range(n_teams))
-        winners = [TEAM_LABELS[i] for i in range(n_teams) if totals.get(i, 0) == best_score]
+        winner_indices, counts, decided_by = _decide_winners(grid, n_teams, totals)
+        if grid:
+            lines = [
+                f"{TEAM_LABELS[i]}: 陣地 **{counts[i]}マス**（侵略度合計 {totals.get(i, 0)}）"
+                for i in range(n_teams)
+            ]
+        else:
+            lines = [f"{TEAM_LABELS[i]}: 侵略度 **{totals.get(i, 0)}**" for i in range(n_teams)]
+        winners = [TEAM_LABELS[i] for i in winner_indices]
 
         embed = discord.Embed(
             title="🏁 陣取りゲーム 大会終了",
-            description="\n".join(lines) + f"\n\n🏆 優勝チーム: **{'・'.join(winners)}**",
+            description="\n".join(lines) + f"\n\n🏆 優勝チーム: **{'・'.join(winners)}**\n決め手: {decided_by}",
             color=discord.Color.gold(),
         )
+        map_embed = await self._build_grid_embed(guild_id)
+        if map_embed is not None:
+            embed.add_field(name="最終マップ", value=map_embed.description, inline=False)
         embed.set_footer(text="お片付けを行う場合は /territory_cleanup を実行してください。")
         await interaction.response.send_message(embed=embed)
         logger.info(f"territory_end: guild={guild_id} winners={winners} by user={interaction.user.id}")

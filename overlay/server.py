@@ -157,7 +157,8 @@ async def handle_api(request: web.Request) -> web.Response:
 
     counts = [0] * n_teams
     for v in cells:
-        counts[v] += 1
+        if v != db_manager.NEUTRAL_CELL:
+            counts[v] += 1
 
     teams = [
         {"label": TEAM_LABELS[i], "color": TEAM_COLORS_HEX[i % len(TEAM_COLORS_HEX)], "count": counts[i]}
