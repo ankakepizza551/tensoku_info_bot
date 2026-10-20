@@ -16,6 +16,8 @@ __all__ = [
     "delete_territory_match",
     "get_territory_matches",
     "get_territory_fought_user_ids",
+    "get_territory_round_fight_counts",
+    "get_territory_round_pairs",
     "get_territory_invasion_totals",
     "init_territory_grid",
     "get_territory_grid",
@@ -38,10 +40,17 @@ __all__ = [
 
 # チーム数ごとの盤面の一辺の長さ（奇数のみ対応。中央マスをタイブレークに使うため）
 GRID_SIDE_BY_TEAM_COUNT = {2: 7, 4: 9}
+# 参加人数がこの人数以下なら一回り小さい盤面にする（少人数だと対戦数が少なく、大きい盤面では陣地が動き切らないため）
+# 4チームは7×7だと四分割の初期陣地が均等にならないため対象外
+SMALL_GRID_MAX_PARTICIPANTS = {2: 8}
 
 
-def grid_side_for_team_count(team_count: int) -> int:
-    return GRID_SIDE_BY_TEAM_COUNT.get(team_count, 5)
+def grid_side_for_team_count(team_count: int, participant_count: int | None = None) -> int:
+    side = GRID_SIDE_BY_TEAM_COUNT.get(team_count, 5)
+    small_max = SMALL_GRID_MAX_PARTICIPANTS.get(team_count)
+    if participant_count is not None and small_max is not None and participant_count <= small_max:
+        side -= 2
+    return side
 
 
 async def save_territory_profile(
@@ -185,6 +194,28 @@ async def get_territory_fought_user_ids(guild_id: int, round: int) -> set:
     return fought
 
 
+async def get_territory_round_fight_counts(guild_id: int, round: int) -> dict:
+    """指定した周回内の、ユーザーIDごとの出場回数を返す"""
+    matches = await get_territory_matches(guild_id)
+    counts = {}
+    for m in matches:
+        if m["round"] != round:
+            continue
+        for uid in (m["winner_id"], m["loser_id"]):
+            counts[uid] = counts.get(uid, 0) + 1
+    return counts
+
+
+async def get_territory_round_pairs(guild_id: int, round: int) -> set:
+    """指定した周回内で対戦済みの組み合わせ（frozenset({user_id, user_id})）の集合を返す"""
+    matches = await get_territory_matches(guild_id)
+    return {
+        frozenset((m["winner_id"], m["loser_id"]))
+        for m in matches
+        if m["round"] == round
+    }
+
+
 async def get_territory_current_round(guild_id: int) -> int:
     settings = await get_territory_settings(guild_id)
     if settings is None or settings.get("current_round") is None:
@@ -229,9 +260,8 @@ async def get_territory_invasion_totals(guild_id: int) -> dict:
             rows = await cursor.fetchall()
         return {r["winner_team"]: r["total"] for r in rows}
 
-def _territory_grid_layout(team_count: int) -> list:
+def _territory_grid_layout(team_count: int, side: int) -> list:
     """side x sideグリッド(行優先インデックス)の初期配置を返す"""
-    side = grid_side_for_team_count(team_count)
     total = side * side
     mid = side // 2
 
@@ -265,8 +295,9 @@ def _territory_grid_layout(team_count: int) -> list:
             layout.append(q)
     return layout
 
-async def init_territory_grid(guild_id: int, team_count: int) -> None:
-    assignment = _territory_grid_layout(team_count)
+async def init_territory_grid(guild_id: int, team_count: int, participant_count: int | None = None) -> None:
+    side = grid_side_for_team_count(team_count, participant_count)
+    assignment = _territory_grid_layout(team_count, side)
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("DELETE FROM territory_grid WHERE guild_id = ?", (guild_id,))
         await db.executemany(
