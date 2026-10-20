@@ -101,6 +101,17 @@ def _decide_winners(grid: list, n_teams: int, invasion_totals: dict) -> tuple:
     return winners, counts, "陣地のマス数が同数のため、侵略度合計"
 
 
+def _round_has_remaining_matches(team_rows: list, fight_counts: dict, pairs: set) -> bool:
+    """今周回でまだ組める対戦（別チーム同士・両者とも出場上限未満・今周未対戦）が残っているか"""
+    limits = _round_fight_limits(team_rows)
+    available = [r for r in team_rows if fight_counts.get(r["user_id"], 0) < limits[r["user_id"]]]
+    for i, a in enumerate(available):
+        for b in available[i + 1:]:
+            if a["team_index"] != b["team_index"] and frozenset((a["user_id"], b["user_id"])) not in pairs:
+                return True
+    return False
+
+
 def _strength_label(team_row: dict) -> str:
     if team_row["is_captain"]:
         return f"大将 (強さ{team_row['strength']})"
@@ -191,7 +202,19 @@ class TerritoryExpansionView(discord.ui.View):
         self.side = side
         self.message: discord.Message | None = None
         self._lock = asyncio.Lock()
+        # 拡張が終わった（完了・中止・時間切れ）ときに呼ぶ処理。最終周の結果発表をマップ確定後にするために使う
+        self.on_finish = None
+        self._finish_called = False
         self._build_select()
+
+    async def _run_on_finish(self):
+        if self.on_finish is None or self._finish_called:
+            return
+        self._finish_called = True
+        try:
+            await self.on_finish()
+        except Exception:
+            logger.exception(f"territory_expand on_finish failed: guild={self.guild_id} match={self.match_id}")
 
     def _build_select(self):
         self.clear_items()
@@ -221,6 +244,7 @@ class TerritoryExpansionView(discord.ui.View):
             await interaction.response.edit_message(
                 content="🗑️ この対戦結果は削除されたため、陣地の拡張は中止されました。", view=None
             )
+            await self._run_on_finish()
             return
 
         cell_indices = [idx for idx in cell_indices if idx in self.frontier][: self.remaining]
@@ -248,6 +272,7 @@ class TerritoryExpansionView(discord.ui.View):
             self.clear_items()
             content = f"✅ {TEAM_LABELS[self.team_index]} の陣地拡張が完了しました！"
             await interaction.response.edit_message(content=content, embed=embed, view=self)
+            await self._run_on_finish()
         else:
             self._build_select()
             content = f"🗺️ 残り{self.remaining}マス選択できます（{TEAM_LABELS[self.team_index]}）"
@@ -268,6 +293,7 @@ class TerritoryExpansionView(discord.ui.View):
                 )
             except discord.HTTPException:
                 pass
+        await self._run_on_finish()
 
 
 class TerritoryCleanupConfirmView(discord.ui.View):
@@ -516,12 +542,10 @@ class TerritoryResultButton(discord.ui.Button):
 
         await interaction.response.edit_message(content="✅ 対戦結果を送信しました。", view=None)
         await interaction.followup.send(embed=outcome["embed"])
-        await view.cog._expand_territory(
+        expansion_view = await view.cog._expand_territory(
             interaction, guild_id, outcome["winner_team_index"], outcome["invasion"], outcome["match_id"]
         )
-        await view.cog._check_round_finished(
-            interaction, guild_id, outcome["fought_before"], outcome["winner_id"], outcome["loser_id"]
-        )
+        await view.cog._check_round_finished(interaction, guild_id, expansion_view)
         view.stop()
 
 
@@ -1059,6 +1083,7 @@ class TerritoryCog(commands.Cog):
         captain2="大将に指定するメンバー（省略時は上級者からランダム選出。足りなければ次に強い人から）",
         captain3="大将に指定するメンバー（省略時は上級者からランダム選出。足りなければ次に強い人から）",
         captain4="大将に指定するメンバー（省略時は上級者からランダム選出。足りなければ次に強い人から）",
+        rounds="周回数（指定すると全員の対戦が終わるたびに自動で次の周へ進み、最終周の後に結果を発表。省略時は管理者が手動で進める）",
     )
     @app_commands.choices(
         team_count=[
@@ -1078,6 +1103,7 @@ class TerritoryCog(commands.Cog):
         captain2: discord.Member = None,
         captain3: discord.Member = None,
         captain4: discord.Member = None,
+        rounds: app_commands.Range[int, 1, 10] = None,
     ):
         guild = interaction.guild
         settings = await db_manager.get_territory_settings(interaction.guild_id) or {}
@@ -1200,6 +1226,7 @@ class TerritoryCog(commands.Cog):
 
         await db_manager.init_territory_grid(interaction.guild_id, n_teams, len(participants))
         await db_manager.reset_territory_round(interaction.guild_id)
+        await db_manager.set_territory_total_rounds(interaction.guild_id, rounds)
 
         team_roles, team_channels, team_voice_channels = await self._sync_team_roles_and_channels(
             guild, teams, target_category
@@ -1208,6 +1235,8 @@ class TerritoryCog(commands.Cog):
         voice_map = {i: ch for i, ch in enumerate(team_voice_channels) if ch is not None}
 
         embed = _build_teams_embed(teams, channel_map, voice_map)
+        if rounds is not None:
+            embed.description = f"🔁 全{rounds}周で開催します（全員の対戦が終わると自動で次の周へ進みます）。"
         if missing:
             names = "、".join(m.display_name for m in missing)
             embed.set_footer(text=f"未登録のため除外: {names}")
@@ -1303,7 +1332,8 @@ class TerritoryCog(commands.Cog):
     async def _expand_territory(
         self, interaction: discord.Interaction, guild_id: int, team_index: int, invasion_score: int,
         match_id: int,
-    ):
+    ) -> "TerritoryExpansionView | None":
+        """勝利チームの陣地を広げる。マスを選ばせる必要がある場合は、その選択用Viewを返す"""
         grid = await db_manager.get_territory_grid(guild_id)
         if not grid:
             return  # マップ未初期化（旧チーム分けなど）の場合は何もしない
@@ -1339,6 +1369,7 @@ class TerritoryCog(commands.Cog):
             view=view,
         )
         view.message = msg
+        return view
 
     @app_commands.command(
         name="territory_map",
@@ -1375,8 +1406,10 @@ class TerritoryCog(commands.Cog):
         for r in rows:
             teams_members[r["team_index"]].append(r)
 
+        total_rounds = await db_manager.get_territory_total_rounds(guild_id)
+        round_label = f"第{current_round}周" + (f" / 全{total_rounds}周" if total_rounds else "")
         embed = discord.Embed(
-            title=f"⚔️ 陣取りゲーム 現在の戦況（第{current_round}周）",
+            title=f"⚔️ 陣取りゲーム 現在の戦況（{round_label}）",
             color=discord.Color.from_rgb(230, 126, 34),
         )
         for i, members in enumerate(teams_members):
@@ -1427,7 +1460,6 @@ class TerritoryCog(commands.Cog):
             return {"ok": False, "error": "❌ 同じチームのメンバー同士は対戦できません。"}
 
         current_round = await db_manager.get_territory_current_round(guild_id)
-        fought = await db_manager.get_territory_fought_user_ids(guild_id, current_round)
         fight_counts = await db_manager.get_territory_round_fight_counts(guild_id, current_round)
         team_rows = await db_manager.get_territory_teams(guild_id)
         limits = _round_fight_limits(team_rows)
@@ -1523,27 +1555,57 @@ class TerritoryCog(commands.Cog):
             "embed": embed,
             "winner_team_index": winner_team["team_index"],
             "invasion": invasion,
-            "fought_before": fought,
-            "winner_id": winner.id,
-            "loser_id": loser.id,
             "match_id": match_id,
         }
 
     async def _check_round_finished(
-        self, interaction: discord.Interaction, guild_id: int, fought_before: set, winner_id: int, loser_id: int
+        self, interaction: discord.Interaction, guild_id: int,
+        pending_expansion: "TerritoryExpansionView | None" = None,
     ):
-        """今周回で全員が出場済みになったら、管理者への案内メッセージを送る（大会終了はしない）"""
+        """今周回でもう組める対戦がなくなったら周回の終了を知らせる。
+        周回数が決まっていれば次の周へ自動で進め、最終周なら最終結果を発表する"""
         all_rows = await db_manager.get_territory_teams(guild_id)
-        new_fought = fought_before | {winner_id, loser_id}
-        if len(new_fought) < len(all_rows):
+        current_round = await db_manager.get_territory_current_round(guild_id)
+        fight_counts = await db_manager.get_territory_round_fight_counts(guild_id, current_round)
+        pairs = await db_manager.get_territory_round_pairs(guild_id, current_round)
+        if _round_has_remaining_matches(all_rows, fight_counts, pairs):
             return
 
-        current_round = await db_manager.get_territory_current_round(guild_id)
-        await interaction.followup.send(
-            f"🔁 第{current_round}周、全員が出場完了しました。\n"
-            "続けて周回するなら `/territory_new_round`、大会を締めるなら `/territory_end` を管理者に実行してもらってください。"
+        total_rounds = await db_manager.get_territory_total_rounds(guild_id)
+        if total_rounds is None:
+            await interaction.followup.send(
+                f"🔁 第{current_round}周、全員が出場完了しました。\n"
+                "続けて周回するなら `/territory_new_round`、大会を締めるなら `/territory_end` を管理者に実行してもらってください。"
+            )
+        elif current_round < total_rounds:
+            new_round = await db_manager.increment_territory_round(guild_id)
+            embed = discord.Embed(
+                title=f"🔁 第{new_round}周 開始（全{total_rounds}周）",
+                description=f"第{current_round}周の対戦がすべて終わったため、自動で次の周へ進みました。\n"
+                            "全員が再度対戦報告できます。陣地マップ・侵略度はそのまま引き継がれます。",
+                color=discord.Color.from_rgb(52, 152, 219),
+            )
+            await interaction.followup.send(embed=embed)
+        else:
+            async def announce_result():
+                embed = await self._build_end_embed(guild_id)
+                await interaction.followup.send(
+                    content=f"🏁 全{total_rounds}周の対戦がすべて終わりました！",
+                    embed=embed,
+                )
+
+            if pending_expansion is not None and not pending_expansion.is_finished():
+                # 最後の対戦の陣地拡張（マス選択）が終わってから、確定したマップで結果を発表する
+                pending_expansion.on_finish = announce_result
+                await interaction.followup.send(
+                    f"🏁 全{total_rounds}周の対戦がすべて終わりました！"
+                    f"{TEAM_LABELS[pending_expansion.team_index]} の陣地拡張が終わり次第、最終結果を発表します。"
+                )
+            else:
+                await announce_result()
+        logger.info(
+            f"territory_round_finished: guild={guild_id} round={current_round} total_rounds={total_rounds}"
         )
-        logger.info(f"territory_round_finished: guild={guild_id} round={current_round}")
 
     @app_commands.command(
         name="territory_report",
@@ -1573,12 +1635,10 @@ class TerritoryCog(commands.Cog):
             return
 
         await interaction.response.send_message(embed=outcome["embed"])
-        await self._expand_territory(
+        expansion_view = await self._expand_territory(
             interaction, guild_id, outcome["winner_team_index"], outcome["invasion"], outcome["match_id"]
         )
-        await self._check_round_finished(
-            interaction, guild_id, outcome["fought_before"], outcome["winner_id"], outcome["loser_id"]
-        )
+        await self._check_round_finished(interaction, guild_id, expansion_view)
 
     @app_commands.command(
         name="territory_score",
@@ -1611,30 +1671,18 @@ class TerritoryCog(commands.Cog):
             return
 
         new_round = await db_manager.increment_territory_round(guild_id)
+        total_rounds = await db_manager.get_territory_total_rounds(guild_id)
         embed = discord.Embed(
-            title=f"🔁 第{new_round}周 開始",
+            title=f"🔁 第{new_round}周 開始" + (f"（全{total_rounds}周）" if total_rounds else ""),
             description="全員が再度対戦報告できるようになりました。陣地マップ・侵略度はそのまま引き継がれます。",
             color=discord.Color.from_rgb(52, 152, 219),
         )
         await interaction.response.send_message(embed=embed)
         logger.info(f"territory_new_round: guild={guild_id} round={new_round} by user={interaction.user.id}")
 
-    @app_commands.command(
-        name="territory_end",
-        description="陣取りゲームの大会終了を宣言し、最終結果を発表します（管理者用）"
-    )
-    @app_commands.default_permissions(manage_guild=True)
-    @app_commands.guild_only()
-    async def territory_end(self, interaction: discord.Interaction):
-        guild_id = interaction.guild_id
+    async def _build_end_embed(self, guild_id: int) -> discord.Embed:
+        """最終結果（優勝チーム・各チームのマス数・最終マップ）のEmbedを作る"""
         rows = await db_manager.get_territory_teams(guild_id)
-        if not rows:
-            await interaction.response.send_message(
-                "まだチーム分けが行われていません。`/territory_draw` を先に実行してください。",
-                ephemeral=True,
-            )
-            return
-
         totals = await db_manager.get_territory_invasion_totals(guild_id)
         grid = await db_manager.get_territory_grid(guild_id)
         n_teams = max(r["team_index"] for r in rows) + 1
@@ -1657,8 +1705,27 @@ class TerritoryCog(commands.Cog):
         if map_embed is not None:
             embed.add_field(name="最終マップ", value=map_embed.description, inline=False)
         embed.set_footer(text="お片付けを行う場合は /territory_cleanup を実行してください。")
+        return embed
+
+    @app_commands.command(
+        name="territory_end",
+        description="陣取りゲームの大会終了を宣言し、最終結果を発表します（管理者用）"
+    )
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.guild_only()
+    async def territory_end(self, interaction: discord.Interaction):
+        guild_id = interaction.guild_id
+        rows = await db_manager.get_territory_teams(guild_id)
+        if not rows:
+            await interaction.response.send_message(
+                "まだチーム分けが行われていません。`/territory_draw` を先に実行してください。",
+                ephemeral=True,
+            )
+            return
+
+        embed = await self._build_end_embed(guild_id)
         await interaction.response.send_message(embed=embed)
-        logger.info(f"territory_end: guild={guild_id} winners={winners} by user={interaction.user.id}")
+        logger.info(f"territory_end: guild={guild_id} by user={interaction.user.id}")
 
     async def _process_match_delete(self, interaction: discord.Interaction, match_id: int):
         match_data = await db_manager.get_territory_match(match_id)
