@@ -19,6 +19,7 @@ TEAM_ROLE_COLORS = [
     discord.Color.from_rgb(46, 204, 113),  # D: 緑
 ]
 PARTICIPANT_ROLE_NAME = "陣取り参加者"
+CAPTAIN_STRENGTH = 5
 
 
 def _neighbors(idx: int, side: int) -> list:
@@ -57,9 +58,14 @@ def _round_fight_limits(team_rows: list) -> dict:
     return {r["user_id"]: -(-largest // sizes[r["team_index"]]) for r in team_rows}
 
 
+def _captain_strength(profile_strength: int) -> int:
+    """大将の強さ。初級者が大将になった場合は、倒されたときの侵略度が過大にならないよう本人の強さのままにする"""
+    return profile_strength if profile_strength == 1 else CAPTAIN_STRENGTH
+
+
 def _strength_label(team_row: dict) -> str:
     if team_row["is_captain"]:
-        return "大将 (強さ5)"
+        return f"大将 (強さ{team_row['strength']})"
     return STRENGTH_LABELS.get(team_row["strength"], str(team_row["strength"]))
 
 
@@ -91,7 +97,11 @@ def _build_teams_embed(teams: list, channel_map: dict = None, voice_map: dict = 
         lines = []
         for m in sorted_members:
             if m["is_captain"]:
-                lines.append(f"👑 {m['username']} (`大将`)")
+                if m["strength"] == CAPTAIN_STRENGTH:
+                    lines.append(f"👑 {m['username']} (`大将`)")
+                else:
+                    label = STRENGTH_LABELS.get(m["strength"], str(m["strength"]))
+                    lines.append(f"👑 {m['username']} (`大将・{label}`)")
             else:
                 label = STRENGTH_LABELS.get(m["strength"], str(m["strength"]))
                 lines.append(f"　{m['username']} (`{label}`)")
@@ -1118,8 +1128,9 @@ class TerritoryCog(commands.Cog):
         team_counts = [0] * n_teams
 
         for i, c in enumerate(captains):
-            teams[i].append({"user_id": c.id, "username": c.display_name, "strength": 5, "is_captain": True})
-            team_totals[i] += 5
+            captain_strength = _captain_strength(profiles[c.id]["strength"])
+            teams[i].append({"user_id": c.id, "username": c.display_name, "strength": captain_strength, "is_captain": True})
+            team_totals[i] += captain_strength
             team_counts[i] += 1
 
         for m in remaining:
