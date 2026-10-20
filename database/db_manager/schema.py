@@ -502,7 +502,7 @@ async def init_db():
         """)
         await db.commit()
 
-        # レイドバトル（初級者vs上級者）: ギルドごとの設定（カテゴリ・ロール・各チャンネル）
+        # SOKKUMAN（初級者vs上級者）: ギルドごとの設定（カテゴリ・ロール・各チャンネル）
         await db.execute("""
             CREATE TABLE IF NOT EXISTS raid_battle_settings (
                 guild_id INTEGER PRIMARY KEY,
@@ -517,7 +517,7 @@ async def init_db():
         """)
         await db.commit()
 
-        # レイドバトル: 上級者の対応状況（自己申告トグル）
+        # SOKKUMAN: 上級者の対応状況（自己申告トグル）
         await db.execute("""
             CREATE TABLE IF NOT EXISTS raid_advanced_status (
                 user_id INTEGER PRIMARY KEY,
@@ -526,7 +526,7 @@ async def init_db():
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        # レイドバトル: 上級者対応状況ボード（常設メッセージを編集して更新）
+        # SOKKUMAN: 上級者対応状況ボード（常設メッセージを編集して更新）
         await db.execute("""
             CREATE TABLE IF NOT EXISTS raid_status_board (
                 guild_id INTEGER PRIMARY KEY,
