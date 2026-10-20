@@ -38,6 +38,8 @@ __all__ = [
     "get_territory_current_round",
     "increment_territory_round",
     "reset_territory_round",
+    "set_territory_total_rounds",
+    "get_territory_total_rounds",
 ]
 
 # どのチームも所有していないマス（初期配置の中央マス）。team_index列はNOT NULLのため-1で表す
@@ -258,6 +260,24 @@ async def reset_territory_round(guild_id: int) -> None:
             (guild_id,),
         )
         await db.commit()
+
+async def set_territory_total_rounds(guild_id: int, total_rounds: int | None) -> None:
+    """大会の周回数を保存する。None なら周回数を決めず、管理者が手動で周回を進める"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT INTO territory_settings (guild_id, total_rounds)
+               VALUES (?, ?)
+               ON CONFLICT(guild_id) DO UPDATE SET total_rounds=excluded.total_rounds""",
+            (guild_id, total_rounds),
+        )
+        await db.commit()
+
+
+async def get_territory_total_rounds(guild_id: int) -> int | None:
+    settings = await get_territory_settings(guild_id)
+    if settings is None:
+        return None
+    return settings.get("total_rounds")
 
 async def get_territory_invasion_totals(guild_id: int) -> dict:
     async with aiosqlite.connect(DB_PATH) as db:

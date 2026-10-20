@@ -184,7 +184,7 @@
 
 **コマンド**: `/territory_register` `/territory_profile` `/territory_list` `/territory_teams` `/territory_map` `/territory_report` `/territory_score` `/territory_match_delete`
 
-**管理者用**: `/territory_setup`（ロール・チャンネル・全パネルを一括セットアップ）、`/territory_draw`（チーム分け抽選）、`/territory_new_round`（周回を進め、全員を再出場可能にする）、`/territory_end`（大会終了と最終結果の発表。陣地のマス数が最も多いチームが優勝、同数なら中央マスを持つチーム、それでも決まらなければ侵略度合計で判定）、`/territory_cleanup`（終了後の片付けとデータリセット）
+**管理者用**: `/territory_setup`（ロール・チャンネル・全パネルを一括セットアップ）、`/territory_draw`（チーム分け抽選。`rounds` で周回数を指定すると、全員の対戦が終わるたびに自動で次の周へ進み、最終周の後に最終結果を自動で発表）、`/territory_new_round`（周回を進め、全員を再出場可能にする）、`/territory_end`（大会終了と最終結果の発表。陣地のマス数が最も多いチームが優勝、同数なら中央マスを持つチーム、それでも決まらなければ侵略度合計で判定）、`/territory_cleanup`（終了後の片付けとデータリセット）
 
 #### 配信オーバーレイ（OBS）
 

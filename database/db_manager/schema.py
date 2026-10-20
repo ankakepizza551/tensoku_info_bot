@@ -179,6 +179,11 @@ async def init_db():
             await db.execute("ALTER TABLE territory_settings ADD COLUMN hq_channel_id INTEGER")
             await db.commit()
 
+        # territory_settings に total_rounds が存在しない場合は追加（周回数の事前指定。NULLなら管理者が手動で進める）
+        if "total_rounds" not in ts_columns:
+            await db.execute("ALTER TABLE territory_settings ADD COLUMN total_rounds INTEGER")
+            await db.commit()
+
         # 陣取りゲーム チームロール・チームチャンネル対応表
         await db.execute(
             """
