@@ -33,11 +33,15 @@ __all__ = [
     "clear_all_territory_profiles",
     "clear_territory_participant_channels",
     "grid_side_for_team_count",
+    "NEUTRAL_CELL",
     "is_small_territory_event",
     "get_territory_current_round",
     "increment_territory_round",
     "reset_territory_round",
 ]
+
+# どのチームも所有していないマス（初期配置の中央マス）。team_index列はNOT NULLのため-1で表す
+NEUTRAL_CELL = -1
 
 # チーム数ごとの盤面の一辺の長さ（奇数のみ対応。中央マスをタイブレークに使うため）
 GRID_SIDE_BY_TEAM_COUNT = {2: 7, 4: 9}
@@ -271,10 +275,12 @@ def _territory_grid_layout(team_count: int, side: int) -> list:
     total = side * side
     mid = side // 2
 
+    center = mid * side + mid
+
     if team_count != 4:
-        # 上半分 / 下半分 の分割（team_countが2以外の場合もこの方式にフォールバック）
-        half = (total + 1) // 2
-        return [0 if i < half else 1 for i in range(total)]
+        # 上半分 / 下半分 の分割（team_countが2以外の場合もこの方式にフォールバック）。
+        # 中央マスは中立にして、両チームの初期マス数を揃える（陣地のマス数で勝敗を決めるため）
+        return [0 if i < center else NEUTRAL_CELL if i == center else 1 for i in range(total)]
 
     # 4チーム: 四隅から連結した領域に分割（中央の行・列は最近傍の象限に寄せる）
     layout = []
@@ -297,7 +303,7 @@ def _territory_grid_layout(team_count: int, side: int) -> list:
             elif c == mid and r > mid:
                 q = 2 if r < mid + 1 + mid // 2 else 3
             else:
-                q = 0  # 中央マス(mid, mid)
+                q = NEUTRAL_CELL  # 中央マス(mid, mid)。初期マス数を揃えるため中立にする
             layout.append(q)
     return layout
 
