@@ -33,6 +33,7 @@ __all__ = [
     "clear_all_territory_profiles",
     "clear_territory_participant_channels",
     "grid_side_for_team_count",
+    "is_small_territory_event",
     "get_territory_current_round",
     "increment_territory_round",
     "reset_territory_round",
@@ -45,10 +46,15 @@ GRID_SIDE_BY_TEAM_COUNT = {2: 7, 4: 9}
 SMALL_GRID_MAX_PARTICIPANTS = {2: 8}
 
 
+def is_small_territory_event(team_count: int, participant_count: int) -> bool:
+    """少人数開催（盤面縮小・大将撃破ボーナス軽減の対象）かどうか"""
+    small_max = SMALL_GRID_MAX_PARTICIPANTS.get(team_count)
+    return small_max is not None and participant_count <= small_max
+
+
 def grid_side_for_team_count(team_count: int, participant_count: int | None = None) -> int:
     side = GRID_SIDE_BY_TEAM_COUNT.get(team_count, 5)
-    small_max = SMALL_GRID_MAX_PARTICIPANTS.get(team_count)
-    if participant_count is not None and small_max is not None and participant_count <= small_max:
+    if participant_count is not None and is_small_territory_event(team_count, participant_count):
         side -= 2
     return side
 
