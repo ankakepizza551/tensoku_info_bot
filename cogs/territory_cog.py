@@ -21,8 +21,9 @@ TEAM_ROLE_COLORS = [
 PARTICIPANT_ROLE_NAME = "陣取り参加者"
 CAPTAIN_STRENGTH = 5
 CAPTAIN_DEFEAT_BONUS = 2
-# 少人数開催では盤面が小さく、大将戦1回で陣地が大きく動きすぎるため軽減する
+# 少人数開催では盤面が小さく、大将戦1回で陣地が大きく動きすぎるため大将撃破・下剋上ボーナスを軽減する
 SMALL_EVENT_CAPTAIN_DEFEAT_BONUS = 1
+SMALL_EVENT_UPSET_BONUS_MAX = 2
 
 
 def _neighbors(idx: int, side: int) -> list:
@@ -1414,11 +1415,10 @@ class TerritoryCog(commands.Cog):
         bonus = max(0, loser_strength - winner_strength)
         captain_defeated = bool(loser_team["is_captain"])
         n_teams = max(r["team_index"] for r in team_rows) + 1
-        captain_bonus = (
-            SMALL_EVENT_CAPTAIN_DEFEAT_BONUS
-            if db_manager.is_small_territory_event(n_teams, len(team_rows))
-            else CAPTAIN_DEFEAT_BONUS
-        )
+        captain_bonus = CAPTAIN_DEFEAT_BONUS
+        if db_manager.is_small_territory_event(n_teams, len(team_rows)):
+            captain_bonus = SMALL_EVENT_CAPTAIN_DEFEAT_BONUS
+            bonus = min(bonus, SMALL_EVENT_UPSET_BONUS_MAX)
         invasion = base + bonus + (captain_bonus if captain_defeated else 0)
 
         match_id = await db_manager.add_territory_match(
