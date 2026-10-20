@@ -35,6 +35,7 @@ __all__ = [
     "grid_side_for_team_count",
     "NEUTRAL_CELL",
     "is_small_territory_event",
+    "SMALL_GRID_MAX_PARTICIPANTS",
     "get_territory_current_round",
     "increment_territory_round",
     "reset_territory_round",
