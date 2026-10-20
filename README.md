@@ -139,7 +139,7 @@
 
 初級者が「対応可能」な上級者に挑む1vs1の企画です。
 
-**パネルのボタン**（`/setup_raid_panel` で設置）
+**パネルのボタン**（`/setup_sokkuman_panel` で設置）
 
 | ボタン | 動作 |
 |---|---|
@@ -147,9 +147,9 @@
 | ⚔️ 上級者として登録 | 上級者として登録 |
 | 🔄 対応状況を切り替える（上級者用） | いま対戦を受けられるかどうかを切り替え |
 
-上級者の対応状況は、`/setup_raid_status_board` で設置するボードに常時表示されます。
+上級者の対応状況は、`/setup_sokkuman_status_board` で設置するボードに常時表示されます。
 
-**管理者用**: `/setup_raid_battle`（カテゴリ・ロール・チャンネルの一括作成）、`/setup_raid_panel`、`/setup_raid_status_board`、`/raid_registered_list`（登録者一覧をコピペ用テキストで出力）、`/raid_cleanup`（終了後の片付けとデータリセット）
+**管理者用**: `/setup_sokkuman`（カテゴリ・ロール・チャンネルの一括作成）、`/setup_sokkuman_panel`、`/setup_sokkuman_status_board`、`/sokkuman_registered_list`（登録者一覧をコピペ用テキストで出力）、`/sokkuman_cleanup`（終了後の片付けとデータリセット）
 
 ### 陣取り戦
 
@@ -316,7 +316,7 @@
 |---|---|
 | 有頂天の塔 | `/setup_rating_room` `/setup_rating_panel` `/setup_rating_queue_board` `/setup_rank_roles` |
 | 対戦募集 | `/setup_recruit_panel` `/remove_recruit_panel` |
-| SOKKUMAN | `/setup_raid_battle` `/setup_raid_panel` `/setup_raid_status_board` `/raid_registered_list` `/raid_cleanup` |
+| SOKKUMAN | `/setup_sokkuman` `/setup_sokkuman_panel` `/setup_sokkuman_status_board` `/sokkuman_registered_list` `/sokkuman_cleanup` |
 | 陣取り戦 | `/territory_setup` `/setup_territory_register_panel` `/setup_territory_info_panel` `/setup_territory_battle_panel` `/territory_draw` `/territory_new_round` `/territory_end` `/territory_cleanup` |
 | メインキャラ | `/main_char_panel` |
 | 記事投稿 | `/setup_article_panel` `/remove_article_panel` |
