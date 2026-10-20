@@ -59,8 +59,8 @@ def _round_fight_limits(team_rows: list) -> dict:
 
 
 def _captain_strength(profile_strength: int) -> int:
-    """大将の強さ。初級者が大将になった場合は、倒されたときの侵略度が過大にならないよう本人の強さのままにする"""
-    return profile_strength if profile_strength == 1 else CAPTAIN_STRENGTH
+    """大将の強さ。上級者以外が大将になった場合は、倒されたときの侵略度が過大にならないよう本人の強さのままにする"""
+    return CAPTAIN_STRENGTH if profile_strength == 3 else profile_strength
 
 
 def _strength_label(team_row: dict) -> str:
