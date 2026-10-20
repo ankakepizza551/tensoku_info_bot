@@ -20,6 +20,7 @@ TEAM_ROLE_COLORS = [
 ]
 PARTICIPANT_ROLE_NAME = "陣取り参加者"
 CAPTAIN_STRENGTH = 5
+SMALL_EVENT_CAPTAIN_STRENGTH = 4
 CAPTAIN_DEFEAT_BONUS = 2
 # 少人数開催では盤面が小さく、大将戦1回で陣地が大きく動きすぎるため大将撃破・下剋上ボーナスを軽減する
 SMALL_EVENT_CAPTAIN_DEFEAT_BONUS = 1
@@ -62,9 +63,12 @@ def _round_fight_limits(team_rows: list) -> dict:
     return {r["user_id"]: -(-largest // sizes[r["team_index"]]) for r in team_rows}
 
 
-def _captain_strength(profile_strength: int) -> int:
-    """大将の強さ。上級者以外が大将になった場合は、倒されたときの侵略度が過大にならないよう本人の強さのままにする"""
-    return CAPTAIN_STRENGTH if profile_strength == 3 else profile_strength
+def _captain_strength(profile_strength: int, small_event: bool = False) -> int:
+    """大将の強さ。上級者以外が大将になった場合は、倒されたときの侵略度が過大にならないよう本人の強さのままにする。
+    少人数開催では盤面が小さいため、上級者の大将も一段下げる"""
+    if profile_strength != 3:
+        return profile_strength
+    return SMALL_EVENT_CAPTAIN_STRENGTH if small_event else CAPTAIN_STRENGTH
 
 
 def _strength_label(team_row: dict) -> str:
@@ -101,7 +105,7 @@ def _build_teams_embed(teams: list, channel_map: dict = None, voice_map: dict = 
         lines = []
         for m in sorted_members:
             if m["is_captain"]:
-                if m["strength"] == CAPTAIN_STRENGTH:
+                if m["strength"] not in (1, 2):
                     lines.append(f"👑 {m['username']} (`大将`)")
                 else:
                     label = STRENGTH_LABELS.get(m["strength"], str(m["strength"]))
@@ -1132,7 +1136,9 @@ class TerritoryCog(commands.Cog):
         team_counts = [0] * n_teams
 
         for i, c in enumerate(captains):
-            captain_strength = _captain_strength(profiles[c.id]["strength"])
+            captain_strength = _captain_strength(
+                profiles[c.id]["strength"], db_manager.is_small_territory_event(n_teams, len(participants))
+            )
             teams[i].append({"user_id": c.id, "username": c.display_name, "strength": captain_strength, "is_captain": True})
             team_totals[i] += captain_strength
             team_counts[i] += 1
