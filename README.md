@@ -1,7 +1,7 @@
 # 天則インフォメーション管理BOT
 
 東方非想天則の対戦コミュニティ「天則コソ練広場」で動いている Discord Bot です。
-レーティング対戦、対戦募集、レイドバトル、陣取り戦、戦績管理、投稿・アンケート・お便りなど、サーバー運営に必要な機能をまとめています。
+レーティング対戦、対戦募集、SOKKUMAN、陣取り戦、戦績管理、投稿・アンケート・お便りなど、サーバー運営に必要な機能をまとめています。
 
 **ユーザーの操作は、チャンネルに設置された「パネル」のボタンが中心です。** スラッシュコマンドは、ボタンと同じ操作をコマンドで呼び出す手段、または管理者が設定・運営するための手段として用意されています。
 
@@ -18,7 +18,7 @@
   - [対戦募集（メッセージ式）](#対戦募集メッセージ式)
   - [戦績の登録・スタッツ・ランキング](#戦績の登録スタッツランキング)
 - [企画](#企画)
-  - [レイドバトル](#レイドバトル)
+  - [SOKKUMAN](#sokkuman)
   - [陣取り戦](#陣取り戦)
 - [交流・投稿](#交流投稿)
   - [メインキャラ登録と分布](#メインキャラ登録と分布)
@@ -43,7 +43,7 @@
 | 対戦募集（メッセージ式） | コマンド → ボタン | `/recruit` |
 | 戦績・スタッツ | コマンド | `/report` `/stats` `/leaderboard` |
 | 月間MVP | 毎月1日に自動投稿 | `/mvp` `/mvp_setup` `/mvp_panel` |
-| レイドバトル | パネルのボタン | （管理者用のみ） |
+| SOKKUMAN | パネルのボタン | （管理者用のみ） |
 | 陣取り戦 | パネルのボタン | `/territory_register` `/territory_report` ほか |
 | メインキャラ | パネルのボタン | `/main_char` `/main_char_list` |
 | 記事投稿 | パネルのボタン | （管理者用のみ） |
@@ -135,11 +135,11 @@
 
 ## 企画
 
-### レイドバトル
+### SOKKUMAN
 
 初級者が「対応可能」な上級者に挑む1vs1の企画です。
 
-**パネルのボタン**（`/setup_raid_panel` で設置）
+**パネルのボタン**（`/setup_sokkuman_panel` で設置）
 
 | ボタン | 動作 |
 |---|---|
@@ -147,9 +147,9 @@
 | ⚔️ 上級者として登録 | 上級者として登録 |
 | 🔄 対応状況を切り替える（上級者用） | いま対戦を受けられるかどうかを切り替え |
 
-上級者の対応状況は、`/setup_raid_status_board` で設置するボードに常時表示されます。
+上級者の対応状況は、`/setup_sokkuman_status_board` で設置するボードに常時表示されます。
 
-**管理者用**: `/setup_raid_battle`（カテゴリ・ロール・チャンネルの一括作成）、`/setup_raid_panel`、`/setup_raid_status_board`、`/raid_registered_list`（登録者一覧をコピペ用テキストで出力）、`/raid_cleanup`（終了後の片付けとデータリセット）
+**管理者用**: `/setup_sokkuman`（カテゴリ・ロール・チャンネルの一括作成）、`/setup_sokkuman_panel`、`/setup_sokkuman_status_board`、`/sokkuman_registered_list`（登録者一覧をコピペ用テキストで出力）、`/sokkuman_cleanup`（終了後の片付けとデータリセット）
 
 ### 陣取り戦
 
@@ -316,7 +316,7 @@
 |---|---|
 | 有頂天の塔 | `/setup_rating_room` `/setup_rating_panel` `/setup_rating_queue_board` `/setup_rank_roles` |
 | 対戦募集 | `/setup_recruit_panel` `/remove_recruit_panel` |
-| レイドバトル | `/setup_raid_battle` `/setup_raid_panel` `/setup_raid_status_board` `/raid_registered_list` `/raid_cleanup` |
+| SOKKUMAN | `/setup_sokkuman` `/setup_sokkuman_panel` `/setup_sokkuman_status_board` `/sokkuman_registered_list` `/sokkuman_cleanup` |
 | 陣取り戦 | `/territory_setup` `/setup_territory_register_panel` `/setup_territory_info_panel` `/setup_territory_battle_panel` `/territory_draw` `/territory_new_round` `/territory_end` `/territory_cleanup` |
 | メインキャラ | `/main_char_panel` |
 | 記事投稿 | `/setup_article_panel` `/remove_article_panel` |
@@ -389,7 +389,7 @@ tensoku_info_bot/
 │   ├── recruit_cog.py        # 対戦募集（メッセージ式）
 │   ├── report_cog.py         # 戦績の登録・削除
 │   ├── stats_cog.py          # スタッツ・リーダーボード
-│   ├── raid_battle_cog.py    # レイドバトル
+│   ├── raid_battle_cog.py    # SOKKUMAN
 │   ├── territory_cog.py      # 陣取り戦
 │   ├── main_char_cog.py      # メインキャラ登録・分布
 │   ├── forum_article_cog.py  # 記事投稿（フォーラム）

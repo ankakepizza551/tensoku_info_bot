@@ -8,14 +8,14 @@ from database import db_manager
 
 logger = logging.getLogger("TensokuMatchBot")
 
-CATEGORY_NAME = "レイドバトル"
+CATEGORY_NAME = "SOKKUMAN"
 BEGINNER_ROLE_NAME = "初級者"
 ADVANCED_ROLE_NAME = "上級者"
 
-RECRUIT_CHANNEL_NAME = "レイド募集"
-BEGINNER_CHANNEL_NAME = "レイド-初級者専用"
-ADVANCED_CHANNEL_NAME = "レイド-上級者専用"
-COMMON_CHANNEL_NAME = "レイド-共通"
+RECRUIT_CHANNEL_NAME = "sokkuman-募集"
+BEGINNER_CHANNEL_NAME = "sokkuman-初級者専用"
+ADVANCED_CHANNEL_NAME = "sokkuman-上級者専用"
+COMMON_CHANNEL_NAME = "sokkuman-共通"
 
 
 async def _resolve_role(guild: discord.Guild, role_id: int | None) -> discord.Role | None:
@@ -97,7 +97,7 @@ async def _sync_status_board(guild: discord.Guild):
 
 
 # ─────────────────────────────────────────────
-#  お片付け（レイド終了後のクリーンアップ）
+#  お片付け（SOKKUMAN終了後のクリーンアップ）
 # ─────────────────────────────────────────────
 
 class RaidCleanupConfirmView(discord.ui.View):
@@ -195,7 +195,7 @@ class RaidPanelView(discord.ui.View):
 # ─────────────────────────────────────────────
 
 class RaidBattleCog(commands.Cog):
-    """初級者vs上級者レイドバトル用のカテゴリ・ロール・チャンネルの一括セットアップと登録/対応状況管理"""
+    """初級者vs上級者イベント「SOKKUMAN」用のカテゴリ・ロール・チャンネルの一括セットアップと登録/対応状況管理"""
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -213,7 +213,7 @@ class RaidBattleCog(commands.Cog):
         settings = await db_manager.get_raid_battle_settings(guild.id)
         if not settings or not settings.get("beginner_role_id") or not settings.get("advanced_role_id"):
             await interaction.followup.send(
-                "❌ このサーバーではレイドバトルが未設定です。管理者に `/setup_raid_battle` の実行を依頼してください。",
+                "❌ このサーバーではSOKKUMANが未設定です。管理者に `/setup_sokkuman` の実行を依頼してください。",
                 ephemeral=True,
             )
             return
@@ -230,9 +230,9 @@ class RaidBattleCog(commands.Cog):
         try:
             if as_advanced:
                 if beginner_role in member.roles:
-                    await member.remove_roles(beginner_role, reason="レイドバトル 上級者へ再登録")
+                    await member.remove_roles(beginner_role, reason="SOKKUMAN 上級者へ再登録")
                 if advanced_role not in member.roles:
-                    await member.add_roles(advanced_role, reason="レイドバトル 上級者登録")
+                    await member.add_roles(advanced_role, reason="SOKKUMAN 上級者登録")
                 await db_manager.ensure_raid_advanced_status(member.id, guild.id)
                 await _sync_status_board(guild)
                 await interaction.followup.send(
@@ -241,10 +241,10 @@ class RaidBattleCog(commands.Cog):
                 )
             else:
                 if advanced_role in member.roles:
-                    await member.remove_roles(advanced_role, reason="レイドバトル 初級者へ再登録")
+                    await member.remove_roles(advanced_role, reason="SOKKUMAN 初級者へ再登録")
                     await _sync_status_board(guild)
                 if beginner_role not in member.roles:
-                    await member.add_roles(beginner_role, reason="レイドバトル 初級者登録")
+                    await member.add_roles(beginner_role, reason="SOKKUMAN 初級者登録")
                 await interaction.followup.send(
                     f"✅ {beginner_role.mention} として登録しました。", ephemeral=True
                 )
@@ -263,7 +263,7 @@ class RaidBattleCog(commands.Cog):
         settings = await db_manager.get_raid_battle_settings(guild.id)
         if not settings or not settings.get("advanced_role_id"):
             await interaction.response.send_message(
-                "❌ このサーバーではレイドバトルが未設定です。", ephemeral=True
+                "❌ このサーバーではSOKKUMANが未設定です。", ephemeral=True
             )
             return
 
@@ -292,7 +292,7 @@ class RaidBattleCog(commands.Cog):
         if role is None:
             role = await guild.create_role(
                 name=name, color=color, mentionable=True,
-                reason="レイドバトル 初期セットアップ",
+                reason="SOKKUMAN 初期セットアップ",
             )
         await db_manager.save_raid_battle_settings(guild.id, **{key: role.id})
         return role
@@ -313,21 +313,21 @@ class RaidBattleCog(commands.Cog):
         if is_new:
             channel = await guild.create_text_channel(
                 name=name, category=category, overwrites=overwrites,
-                reason="レイドバトル 初期セットアップ",
+                reason="SOKKUMAN 初期セットアップ",
             )
         await db_manager.save_raid_battle_settings(guild.id, **{key: channel.id})
         return channel, is_new
 
-    # ── /setup_raid_battle ───────────────────────
+    # ── /setup_sokkuman ───────────────────────
 
     @app_commands.command(
-        name="setup_raid_battle",
-        description="初級者vs上級者レイドバトル用のカテゴリ・ロール・チャンネルを一括で作成します（管理者用）",
+        name="setup_sokkuman",
+        description="初級者vs上級者イベント「SOKKUMAN」用のカテゴリ・ロール・チャンネルを一括で作成します（管理者用）",
     )
     @app_commands.describe(category="使用するカテゴリ（省略時は新規作成）")
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.guild_only()
-    async def setup_raid_battle(
+    async def setup_sokkuman(
         self, interaction: discord.Interaction, category: discord.CategoryChannel | None = None
     ):
         guild = interaction.guild
@@ -342,7 +342,7 @@ class RaidBattleCog(commands.Cog):
                 category = discord.utils.get(guild.categories, name=CATEGORY_NAME)
             if category is None:
                 category = await guild.create_category(
-                    CATEGORY_NAME, reason="レイドバトル 初期セットアップ"
+                    CATEGORY_NAME, reason="SOKKUMAN 初期セットアップ"
                 )
             await db_manager.save_raid_battle_settings(guild.id, category_id=category.id)
             settings = await db_manager.get_raid_battle_settings(guild.id) or {}
@@ -392,7 +392,7 @@ class RaidBattleCog(commands.Cog):
 
             if recruit_is_new:
                 panel_embed = discord.Embed(
-                    title="⚔️ レイドバトル 登録パネル",
+                    title="⚔️ SOKKUMAN 登録パネル",
                     description=(
                         "下のボタンから初級者/上級者どちらかを選んで登録してください。\n"
                         "・🔰 初級者として登録\n"
@@ -415,7 +415,7 @@ class RaidBattleCog(commands.Cog):
             )
             return
         except discord.HTTPException as e:
-            logger.error(f"setup_raid_battle エラー: {e}")
+            logger.error(f"setup_sokkuman エラー: {e}")
             await interaction.followup.send(f"❌ セットアップ中にエラーが発生しました: {e}", ephemeral=True)
             return
 
@@ -423,7 +423,7 @@ class RaidBattleCog(commands.Cog):
             return "" if is_new else "（既存を再利用）"
 
         summary = discord.Embed(
-            title="✅ レイドバトル 初期セットアップ完了",
+            title="✅ SOKKUMAN 初期セットアップ完了",
             description="初級者/上級者の登録は募集チャンネルの登録パネルから行えます。",
             color=discord.Color.from_rgb(46, 204, 113),
         )
@@ -436,22 +436,22 @@ class RaidBattleCog(commands.Cog):
         summary.add_field(name="上級者ロール", value=advanced_role.mention, inline=True)
 
         await interaction.followup.send(embed=summary, ephemeral=True)
-        logger.info(f"setup_raid_battle: guild={guild.id} category={category.id}")
+        logger.info(f"setup_sokkuman: guild={guild.id} category={category.id}")
 
-    # ── /setup_raid_panel ─────────────────────────
+    # ── /setup_sokkuman_panel ─────────────────────────
 
     @app_commands.command(
-        name="setup_raid_panel",
-        description="レイドバトルの登録・対応状況切り替えパネルをこのチャンネルに設置します（管理者用）",
+        name="setup_sokkuman_panel",
+        description="SOKKUMANの登録・対応状況切り替えパネルをこのチャンネルに設置します（管理者用）",
     )
     @app_commands.describe(channel="設置するチャンネル（スレッドも指定可）")
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.guild_only()
-    async def setup_raid_panel(
+    async def setup_sokkuman_panel(
         self, interaction: discord.Interaction, channel: discord.TextChannel | discord.Thread
     ):
         embed = discord.Embed(
-            title="⚔️ レイドバトル 登録パネル",
+            title="⚔️ SOKKUMAN 登録パネル",
             description=(
                 "・🔰 初級者として登録\n"
                 "・⚔️ 上級者として登録（デフォルトで「対応可能」状態になります）\n"
@@ -470,18 +470,18 @@ class RaidBattleCog(commands.Cog):
         await interaction.response.send_message(
             f"✅ 登録パネルを {channel.mention} に設置しました。", ephemeral=True
         )
-        logger.info(f"setup_raid_panel: guild={interaction.guild_id} channel={channel.id}")
+        logger.info(f"setup_sokkuman_panel: guild={interaction.guild_id} channel={channel.id}")
 
-    # ── /setup_raid_status_board ─────────────────
+    # ── /setup_sokkuman_status_board ─────────────────
 
     @app_commands.command(
-        name="setup_raid_status_board",
+        name="setup_sokkuman_status_board",
         description="上級者の対応状況を常時表示するボードをこのチャンネルに設置します（管理者用）",
     )
     @app_commands.describe(channel="設置するチャンネル（スレッドも指定可）")
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.guild_only()
-    async def setup_raid_status_board(
+    async def setup_sokkuman_status_board(
         self, interaction: discord.Interaction, channel: discord.TextChannel | discord.Thread
     ):
         guild = interaction.guild
@@ -489,7 +489,7 @@ class RaidBattleCog(commands.Cog):
         advanced_role = await _resolve_role(guild, settings.get("advanced_role_id")) if settings else None
         if advanced_role is None:
             await interaction.response.send_message(
-                "❌ 上級者ロールが未設定です。先に `/setup_raid_battle` を実行してください。", ephemeral=True
+                "❌ 上級者ロールが未設定です。先に `/setup_sokkuman` を実行してください。", ephemeral=True
             )
             return
 
@@ -508,22 +508,22 @@ class RaidBattleCog(commands.Cog):
         await interaction.response.send_message(
             f"✅ 対応状況ボードを {channel.mention} に設置しました。", ephemeral=True
         )
-        logger.info(f"setup_raid_status_board: guild={guild.id} channel={channel.id} message={board_msg.id}")
+        logger.info(f"setup_sokkuman_status_board: guild={guild.id} channel={channel.id} message={board_msg.id}")
 
-    # ── /raid_registered_list ─────────────────────
+    # ── /sokkuman_registered_list ─────────────────────
 
     @app_commands.command(
-        name="raid_registered_list",
+        name="sokkuman_registered_list",
         description="現在登録されている初級者/上級者の一覧をコピペ用テキストで出力します（管理者用）",
     )
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.guild_only()
-    async def raid_registered_list(self, interaction: discord.Interaction):
+    async def sokkuman_registered_list(self, interaction: discord.Interaction):
         guild = interaction.guild
         settings = await db_manager.get_raid_battle_settings(guild.id)
         if not settings or not settings.get("beginner_role_id") or not settings.get("advanced_role_id"):
             await interaction.response.send_message(
-                "❌ このサーバーではレイドバトルが未設定です。", ephemeral=True
+                "❌ このサーバーではSOKKUMANが未設定です。", ephemeral=True
             )
             return
 
@@ -559,9 +559,9 @@ class RaidBattleCog(commands.Cog):
         for chunk in chunks[1:]:
             await interaction.followup.send(f"```\n{chunk}\n```", ephemeral=True)
 
-        logger.info(f"raid_registered_list: guild={guild.id} count={len(lines)}")
+        logger.info(f"sokkuman_registered_list: guild={guild.id} count={len(lines)}")
 
-    # ── お片付け（レイド終了後のクリーンアップ） ──
+    # ── お片付け（SOKKUMAN終了後のクリーンアップ） ──
 
     async def _execute_raid_cleanup(self, guild: discord.Guild, settings: dict) -> discord.Embed:
         deleted_channels = 0
@@ -572,7 +572,7 @@ class RaidBattleCog(commands.Cog):
             channel = await _resolve_channel(guild, settings.get(key))
             if channel is not None:
                 try:
-                    await channel.delete(reason="レイドバトル 終了によるお片付け")
+                    await channel.delete(reason="SOKKUMAN 終了によるお片付け")
                     deleted_channels += 1
                 except discord.Forbidden:
                     errors.append(f"チャンネル {channel.name} の削除に失敗（権限不足）")
@@ -580,7 +580,7 @@ class RaidBattleCog(commands.Cog):
         category = await _resolve_channel(guild, settings.get("category_id"))
         if category is not None:
             try:
-                await category.delete(reason="レイドバトル 終了によるお片付け")
+                await category.delete(reason="SOKKUMAN 終了によるお片付け")
             except discord.Forbidden:
                 errors.append(f"カテゴリ {category.name} の削除に失敗（権限不足）")
 
@@ -588,7 +588,7 @@ class RaidBattleCog(commands.Cog):
             role = await _resolve_role(guild, settings.get(key))
             if role is not None:
                 try:
-                    await role.delete(reason="レイドバトル 終了によるお片付け")
+                    await role.delete(reason="SOKKUMAN 終了によるお片付け")
                     deleted_roles += 1
                 except discord.Forbidden:
                     errors.append(f"ロール {role.name} の削除に失敗（権限不足）")
@@ -598,7 +598,7 @@ class RaidBattleCog(commands.Cog):
         await db_manager.clear_raid_status_board(guild.id)
 
         embed = discord.Embed(
-            title="🧹 レイドバトル お片付け完了",
+            title="🧹 SOKKUMAN お片付け完了",
             color=discord.Color.from_rgb(46, 204, 113),
         )
         embed.add_field(name="削除したチャンネル/カテゴリ", value=str(deleted_channels + (1 if category else 0)), inline=True)
@@ -610,20 +610,20 @@ class RaidBattleCog(commands.Cog):
         )
         if errors:
             embed.add_field(name="⚠️ 一部失敗", value="\n".join(errors)[:1024], inline=False)
-        embed.set_footer(text="次回は /setup_raid_battle で最初から作り直せます。")
+        embed.set_footer(text="次回は /setup_sokkuman で最初から作り直せます。")
 
         logger.info(
-            f"raid_cleanup: guild={guild.id} channels={deleted_channels} roles={deleted_roles} errors={len(errors)}"
+            f"sokkuman_cleanup: guild={guild.id} channels={deleted_channels} roles={deleted_roles} errors={len(errors)}"
         )
         return embed
 
     @app_commands.command(
-        name="raid_cleanup",
-        description="レイドバトル終了後のお片付け（カテゴリ・チャンネル・ロールの削除+データリセット）を行います（管理者用）",
+        name="sokkuman_cleanup",
+        description="SOKKUMAN終了後のお片付け（カテゴリ・チャンネル・ロールの削除+データリセット）を行います（管理者用）",
     )
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.guild_only()
-    async def raid_cleanup(self, interaction: discord.Interaction):
+    async def sokkuman_cleanup(self, interaction: discord.Interaction):
         guild = interaction.guild
         settings = await db_manager.get_raid_battle_settings(guild.id) or {}
 
@@ -650,11 +650,11 @@ class RaidBattleCog(commands.Cog):
         lines.append(f"上級者ロール: {advanced_role.mention if advanced_role else '(すでに存在しません)'}")
 
         embed = discord.Embed(
-            title="⚠️ レイドバトル お片付け確認",
+            title="⚠️ SOKKUMAN お片付け確認",
             description=(
                 "以下のカテゴリ・チャンネル・ロールをすべて削除し、登録・対応状況データをリセットします。\n"
                 "**この操作は取り消せません。**\n\n"
-                "登録者リストが必要な場合は、先に `/raid_registered_list` で出力しておいてください。"
+                "登録者リストが必要な場合は、先に `/sokkuman_registered_list` で出力しておいてください。"
             ),
             color=discord.Color.from_rgb(230, 126, 34),
         )
