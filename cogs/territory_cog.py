@@ -47,6 +47,16 @@ def _compute_frontier(owner_map: dict, team_index: int, side: int) -> set:
     return frontier
 
 
+def _round_fight_limits(team_rows: list) -> dict:
+    """1周あたりの出場上限をユーザーIDごとに返す。
+    人数の少ないチームのメンバーは、多いチームの全員が出場できるよう複数回出場できる"""
+    sizes = {}
+    for r in team_rows:
+        sizes[r["team_index"]] = sizes.get(r["team_index"], 0) + 1
+    largest = max(sizes.values(), default=1)
+    return {r["user_id"]: -(-largest // sizes[r["team_index"]]) for r in team_rows}
+
+
 def _strength_label(team_row: dict) -> str:
     if team_row["is_captain"]:
         return "大将 (強さ5)"
@@ -997,10 +1007,10 @@ class TerritoryCog(commands.Cog):
         team_count="チーム数",
         role="参加者を示すロール（省略時は `/territory_register` で自動付与される参加者ロールを使用）",
         category="チームチャンネルを作成するカテゴリ（省略時は前回指定したカテゴリ、なければカテゴリなし）",
-        captain1="大将に指定するメンバー（省略時はその枠を上級者からランダム選出）",
-        captain2="大将に指定するメンバー（省略時はその枠を上級者からランダム選出）",
-        captain3="大将に指定するメンバー（省略時はその枠を上級者からランダム選出）",
-        captain4="大将に指定するメンバー（省略時はその枠を上級者からランダム選出）",
+        captain1="大将に指定するメンバー（省略時は上級者からランダム選出。足りなければ次に強い人から）",
+        captain2="大将に指定するメンバー（省略時は上級者からランダム選出。足りなければ次に強い人から）",
+        captain3="大将に指定するメンバー（省略時は上級者からランダム選出。足りなければ次に強い人から）",
+        captain4="大将に指定するメンバー（省略時は上級者からランダム選出。足りなければ次に強い人から）",
     )
     @app_commands.choices(
         team_count=[
@@ -1087,29 +1097,14 @@ class TerritoryCog(commands.Cog):
                     ephemeral=True,
                 )
                 return
-            if profiles[m.id]["strength"] != 3:
-                await interaction.response.send_message(
-                    f"❌ {m.display_name} さんは上級者（強さ3）ではないため大将に指定できません。",
-                    ephemeral=True,
-                )
-                return
 
         manual_captain_ids = {c.id for c in manual_captains}
         remaining_slots = n_teams - len(manual_captains)
 
-        captain_pool = [
-            m for m in participants
-            if profiles[m.id]["strength"] == 3 and m.id not in manual_captain_ids
-        ]
-        if len(captain_pool) < remaining_slots:
-            await interaction.response.send_message(
-                f"❌ 大将候補（上級者）が不足しています（あと{remaining_slots}人必要、現在{len(captain_pool)}人）。"
-                "上級者の登録者を増やすか、大将を指定してから再度実行してください。",
-                ephemeral=True,
-            )
-            return
-
+        # 少人数でも開催できるよう、上級者が足りない分は次に強い人から大将を選ぶ（同じ強さの中ではランダム）
+        captain_pool = [m for m in participants if m.id not in manual_captain_ids]
         random.shuffle(captain_pool)
+        captain_pool.sort(key=lambda m: profiles[m.id]["strength"], reverse=True)
         captains = manual_captains + captain_pool[:remaining_slots]
         random.shuffle(captains)
         captain_ids = {c.id for c in captains}
@@ -1152,7 +1147,7 @@ class TerritoryCog(commands.Cog):
                     is_captain=md["is_captain"],
                 )
 
-        await db_manager.init_territory_grid(interaction.guild_id, n_teams)
+        await db_manager.init_territory_grid(interaction.guild_id, n_teams, len(participants))
         await db_manager.reset_territory_round(interaction.guild_id)
 
         team_roles, team_channels, team_voice_channels = await self._sync_team_roles_and_channels(
@@ -1310,6 +1305,8 @@ class TerritoryCog(commands.Cog):
         totals = await db_manager.get_territory_invasion_totals(guild_id)
         current_round = await db_manager.get_territory_current_round(guild_id)
         fought = await db_manager.get_territory_fought_user_ids(guild_id, current_round)
+        fight_counts = await db_manager.get_territory_round_fight_counts(guild_id, current_round)
+        limits = _round_fight_limits(rows)
 
         teams_members = [[] for _ in range(n_teams)]
         for r in rows:
@@ -1324,6 +1321,17 @@ class TerritoryCog(commands.Cog):
             remaining = [m["username"] for m in members if m["user_id"] not in fought]
             done = len(members) - len(remaining)
             value = f"侵略度合計: **{score}**\n出場済み: {done}/{len(members)}人"
+            team_limit = limits.get(members[0]["user_id"], 1) if members else 1
+            if team_limit > 1:
+                # 少人数側のチームは複数回出場できるため、残り回数がある人を示す
+                left = [
+                    f"{m['username']}(あと{team_limit - fight_counts.get(m['user_id'], 0)}回)"
+                    for m in members
+                    if fight_counts.get(m["user_id"], 0) < team_limit
+                ]
+                value += f"\n※人数差のため1人{team_limit}回まで出場可"
+                if left:
+                    value += f"\n出場可能: {', '.join(left)}"
             if remaining:
                 value += f"\n未出場: {', '.join(remaining)}"
             embed.add_field(name=TEAM_LABELS[i], value=value, inline=False)
@@ -1357,12 +1365,25 @@ class TerritoryCog(commands.Cog):
 
         current_round = await db_manager.get_territory_current_round(guild_id)
         fought = await db_manager.get_territory_fought_user_ids(guild_id, current_round)
-        if reporter.id in fought:
-            return {"ok": False, "error": f"❌ あなたは第{current_round}周ですでに出場済みです（1人1回までの出場です）。"}
-        if opponent.id in fought:
+        fight_counts = await db_manager.get_territory_round_fight_counts(guild_id, current_round)
+        limits = _round_fight_limits(await db_manager.get_territory_teams(guild_id))
+        reporter_limit = limits.get(reporter.id, 1)
+        opponent_limit = limits.get(opponent.id, 1)
+        if fight_counts.get(reporter.id, 0) >= reporter_limit:
             return {
                 "ok": False,
-                "error": f"❌ {opponent.display_name} さんは第{current_round}周ですでに出場済みです（1人1回までの出場です）。",
+                "error": f"❌ あなたは第{current_round}周ですでに出場済みです（この周は1人{reporter_limit}回までの出場です）。",
+            }
+        if fight_counts.get(opponent.id, 0) >= opponent_limit:
+            return {
+                "ok": False,
+                "error": f"❌ {opponent.display_name} さんは第{current_round}周ですでに出場済みです"
+                         f"（この周は1人{opponent_limit}回までの出場です）。",
+            }
+        if frozenset((reporter.id, opponent.id)) in await db_manager.get_territory_round_pairs(guild_id, current_round):
+            return {
+                "ok": False,
+                "error": f"❌ {opponent.display_name} さんとは第{current_round}周ですでに対戦済みです。別の相手と対戦してください。",
             }
 
         if result_value == "win":
