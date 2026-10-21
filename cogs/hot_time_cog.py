@@ -22,7 +22,7 @@ _SCHEDULE = {
     "start": (datetime.timedelta(hours=21), datetime.timedelta(hours=24)),    # 開始通知: 木曜 21:00〜
     "summary": (datetime.timedelta(hours=24), datetime.timedelta(hours=36)),  # まとめ: 金曜 0:00〜
 }
-_HOT_TIME_START = datetime.timedelta(hours=21)
+_HOT_TIME_START = datetime.timedelta(hours=db_manager.HOT_TIME_START_HOUR)
 _HOT_TIME_END = datetime.timedelta(hours=24)
 
 _MEDALS = {1: "🥇", 2: "🥈", 3: "🥉"}

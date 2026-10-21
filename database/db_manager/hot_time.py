@@ -7,6 +7,7 @@ from ._common import DB_PATH
 __all__ = [
     "HOT_TIME_NAME",
     "HOT_TIME_WEEKDAY",
+    "HOT_TIME_START_HOUR",
     "HOT_TIME_KINDS",
     "set_hot_time_settings",
     "get_hot_time_settings",
@@ -20,6 +21,7 @@ __all__ = [
 
 HOT_TIME_NAME = "コソ練広場 天則 HOT TIME"
 HOT_TIME_WEEKDAY = 3  # 木曜（月曜=0）
+HOT_TIME_START_HOUR = 21  # 21:00〜24:00（JST）
 
 # 自動投稿の種類（朝の予告・開始通知・終了後のまとめ）。各列には投稿済みのHOT TIME開催日（木曜, YYYY-MM-DD）を入れる
 HOT_TIME_KINDS = ("morning", "start", "summary")
