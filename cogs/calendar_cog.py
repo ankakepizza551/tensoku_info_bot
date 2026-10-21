@@ -32,6 +32,14 @@ async def _deny_calendar_edit(interaction: discord.Interaction) -> None:
     await interaction.response.send_message(NO_EDIT_PERMISSION_MESSAGE, ephemeral=True)
 
 
+async def get_calendar_events(guild_id: int, year: int, month: int) -> list:
+    """カレンダーに表示する予定。登録された予定に、毎週のHOT TIMEを加える"""
+    start = datetime.date(year, month, 1)
+    end = datetime.date(year + (month == 12), month % 12 + 1, 1)
+    events = await db.get_events(guild_id)
+    return events + await db.get_hot_time_calendar_events(guild_id, start, end)
+
+
 def build_calendar_embed(year: int, month: int, events: list) -> discord.Embed:
     now = datetime.datetime.now(JST)
     month_events = [
@@ -44,7 +52,10 @@ def build_calendar_embed(year: int, month: int, events: list) -> discord.Embed:
     for e in month_events:
         dt = datetime.datetime.strptime(e["date"], "%Y-%m-%d")
         wd = WEEKDAYS_JP[dt.weekday()]
-        icon = "🟢" if e["type"] == "online" else "🔴"
+        if e.get("recurring"):
+            icon = "🔥"
+        else:
+            icon = "🟢" if e["type"] == "online" else "🔴"
         hosted_tag = "" if e.get("hosted", "internal") == "internal" else "🌐 "
         line = f"{icon} **{month}/{dt.day}({wd})"
         if e["time"]:
@@ -105,7 +116,7 @@ class CalendarView(discord.ui.View):
         self.year = year
         self.month = month
         await db.update_calendar_display(self.guild_id, year, month)
-        events = await db.get_events(self.guild_id)
+        events = await get_calendar_events(self.guild_id, year, month)
         embed = build_calendar_embed(year, month, events)
         await interaction.response.edit_message(embed=embed, view=self)
 
@@ -530,7 +541,7 @@ class CalendarCog(commands.Cog):
         except Exception as e:
             logger.warning(f"カレンダーメッセージの取得に失敗しました (guild_id={guild_id}): {e}")
             return
-        events = await db.get_events(guild_id)
+        events = await get_calendar_events(guild_id, record["display_year"], record["display_month"])
         embed = build_calendar_embed(record["display_year"], record["display_month"], events)
         view = CalendarView(record["display_year"], record["display_month"], guild_id)
         await msg.edit(embed=embed, view=view)
@@ -546,7 +557,7 @@ class CalendarCog(commands.Cog):
     ):
         target = channel or interaction.channel
         now = datetime.datetime.now(JST)
-        events = await db.get_events(interaction.guild_id)
+        events = await get_calendar_events(interaction.guild_id, now.year, now.month)
         embed = build_calendar_embed(now.year, now.month, events)
         view = CalendarView(now.year, now.month, interaction.guild_id)
 

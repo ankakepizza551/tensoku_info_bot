@@ -16,6 +16,10 @@ logger = logging.getLogger("TensokuMatchBot")
 
 JST = datetime.timezone(datetime.timedelta(hours=9))
 
+# 公開カレンダーに載せる毎週のHOT TIMEの範囲（今月を基準に、何か月前から何か月先まで）
+_HOT_TIME_MONTHS_BEFORE = 1
+_HOT_TIME_MONTHS_AFTER = 6
+
 # 許可するオリジン（カンマ区切り）。未設定なら集計値のみなので全許可。
 _ALLOWED_ORIGINS = [
     o.strip() for o in os.getenv("PUBLIC_API_ORIGINS", "*").split(",") if o.strip()
@@ -65,11 +69,24 @@ async def handle_stats(request: web.Request) -> web.Response:
     return web.json_response(body, headers=_cors_headers(request))
 
 
+def _add_months(day: datetime.date, months: int) -> datetime.date:
+    """day（月初）から months か月ずらした月初を返す"""
+    index = day.year * 12 + day.month - 1 + months
+    return datetime.date(index // 12, index % 12 + 1, 1)
+
+
 async def handle_events(request: web.Request) -> web.Response:
-    """公開カレンダー用の予定一覧。PUBLIC_GUILD_ID を設定すると、そのサーバーの予定だけを返す"""
+    """公開カレンダー用の予定一覧。PUBLIC_GUILD_ID を設定すると、そのサーバーの予定だけを返す。
+    毎週のHOT TIMEは recurring: true として、今月の前後の範囲だけ含める"""
     guild_id = int(os.getenv("PUBLIC_GUILD_ID", "0") or 0) or None
+    this_month = datetime.datetime.now(JST).date().replace(day=1)
     try:
         events = await db_manager.get_public_events(guild_id)
+        events += await db_manager.get_hot_time_calendar_events(
+            guild_id,
+            _add_months(this_month, -_HOT_TIME_MONTHS_BEFORE),
+            _add_months(this_month, _HOT_TIME_MONTHS_AFTER + 1),
+        )
     except Exception as e:
         logger.error(f"公開API events 取得失敗: {e}")
         return web.json_response({"error": "取得に失敗しました。"}, status=500, headers=_cors_headers(request))
@@ -84,8 +101,9 @@ async def handle_events(request: web.Request) -> web.Response:
             "location": e["location"] or "",
             "url": e["url"] or "",
             "hosted": e["hosted"] or "internal",
+            "recurring": bool(e.get("recurring")),
         }
-        for e in events
+        for e in sorted(events, key=lambda e: (e["date"], e["time"] or ""))
     ]
     return web.json_response(body, headers=_cors_headers(request))
 
