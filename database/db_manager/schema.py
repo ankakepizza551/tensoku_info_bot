@@ -500,6 +500,14 @@ async def init_db():
                 message_id INTEGER NOT NULL
             )
         """)
+        # 有頂天の塔 操作パネル（HOT TIMEの開始・終了時に見出しを描き直すため、設置したメッセージを記録する）
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS rating_panels (
+                message_id INTEGER PRIMARY KEY,
+                guild_id INTEGER NOT NULL,
+                channel_id INTEGER NOT NULL
+            )
+        """)
         await db.commit()
 
         # SOKKUMAN（初級者vs上級者）: ギルドごとの設定（カテゴリ・ロール・各チャンネル）

@@ -36,6 +36,18 @@ def _session_start(now: datetime.datetime) -> datetime.datetime:
     return datetime.datetime(day.year, day.month, day.day, tzinfo=JST)
 
 
+def is_hot_time(now: datetime.datetime | None = None) -> bool:
+    """now（省略時は現在時刻）がHOT TIMEの開催中（木曜 21:00〜24:00 JST）かどうか"""
+    now = (now or datetime.datetime.now(JST)).astimezone(JST)
+    session = _session_start(now)
+    return session + _HOT_TIME_START <= now < session + _HOT_TIME_END
+
+
+async def hot_time_active(guild_id: int) -> bool:
+    """そのサーバーでHOT TIMEが設定されていて、いま開催中かどうか"""
+    return is_hot_time() and await db_manager.get_hot_time_setting(guild_id) is not None
+
+
 def _to_db_time(dt: datetime.datetime) -> str:
     """DBの created_at（UTC）と同じ形式にする"""
     return dt.astimezone(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
@@ -199,6 +211,9 @@ class HotTimeCog(commands.Cog):
                     continue
                 if setting[f"last_{kind}_date"] == session_date:
                     continue
+                if kind in ("start", "summary"):
+                    # 開始・終了に合わせて、有頂天の塔のパネルと待機状況ボードの見た目を切り替える
+                    await self._refresh_rating_display(setting["guild_id"])
                 try:
                     await self._post(setting, kind, session)
                     await db_manager.mark_hot_time_posted(setting["guild_id"], kind, session_date)
@@ -208,6 +223,17 @@ class HotTimeCog(commands.Cog):
     @_post_hot_time.before_loop
     async def _before_post_hot_time(self):
         await self.bot.wait_until_ready()
+
+    async def _refresh_rating_display(self, guild_id: int):
+        """有頂天の塔のパネルと待機状況ボードを、HOT TIMEの開催状況に合わせて描き直す"""
+        cog = self.bot.cogs.get("RatingRoomCog")
+        guild = self.bot.get_guild(guild_id)
+        if cog is None or guild is None:
+            return
+        try:
+            await cog.refresh_hot_time_display(guild)
+        except Exception as e:
+            logger.warning(f"HOT TIMEの有頂天の塔表示更新失敗 (guild={guild_id}): {e}")
 
     async def _refresh_calendar(self, guild_id: int):
         """カレンダーにHOT TIMEの予定を出し入れするため、設置済みのカレンダーを描き直す"""
@@ -263,6 +289,7 @@ class HotTimeCog(commands.Cog):
             ephemeral=True,
         )
         await self._refresh_calendar(interaction.guild_id)
+        await self._refresh_rating_display(interaction.guild_id)
         logger.info(f"hot_time_setup: guild={interaction.guild_id} channel={channel.id} role={role.id if role else None}")
 
     @app_commands.command(
@@ -278,6 +305,7 @@ class HotTimeCog(commands.Cog):
         else:
             await interaction.response.send_message("HOT TIMEのお知らせは設定されていません。", ephemeral=True)
         await self._refresh_calendar(interaction.guild_id)
+        await self._refresh_rating_display(interaction.guild_id)
         logger.info(f"hot_time_stop: guild={interaction.guild_id} deleted={deleted}")
 
     @app_commands.command(
