@@ -3,6 +3,7 @@ import datetime
 import aiosqlite
 
 from ._common import DB_PATH
+from .hot_time import HOT_TIME_START_HOUR, HOT_TIME_WEEKDAY
 
 __all__ = [
     "MVP_DAILY_PAIR_CAP",
@@ -18,20 +19,28 @@ JST = datetime.timezone(datetime.timedelta(hours=9))
 # 同じ相手との対戦は、1日あたりこの回数までしかカウントしない（身内での回し続けによる水増し防止）
 MVP_DAILY_PAIR_CAP = 5
 
+# HOT TIME（木曜 21:00〜24:00 JST）に報告された対戦なら1。SQLiteの %w は日曜=0 なので曜日をずらす
+_HOT_TIME_SQL = (
+    f"CASE WHEN strftime('%w', created_at, '+9 hours') = '{(HOT_TIME_WEEKDAY + 1) % 7}' "
+    f"AND CAST(strftime('%H', created_at, '+9 hours') AS INTEGER) >= {HOT_TIME_START_HOUR} THEN 1 ELSE 0 END"
+)
+
 # 確定済みの対戦を「自分視点」で1試合につき2行に展開し、(自分, 相手, 日) ごとに上限までに絞って集計する。
 # created_at は UTC 保存なので、日の区切りは JST に直して判定する。
-_MVP_SQL = """
+_MVP_SQL = f"""
 WITH m AS (
     SELECT match_id, player1_id AS me, player2_id AS opp,
            CASE WHEN score1 > score2 THEN 1 ELSE 0 END AS win,
-           date(created_at, '+9 hours') AS d
+           date(created_at, '+9 hours') AS d,
+           {_HOT_TIME_SQL} AS hot
     FROM matches
     WHERE is_confirmed = 1 AND player1_id != player2_id
       AND created_at >= ? AND created_at < ?
     UNION ALL
     SELECT match_id, player2_id, player1_id,
            CASE WHEN score2 > score1 THEN 1 ELSE 0 END,
-           date(created_at, '+9 hours')
+           date(created_at, '+9 hours'),
+           {_HOT_TIME_SQL}
     FROM matches
     WHERE is_confirmed = 1 AND player1_id != player2_id
       AND created_at >= ? AND created_at < ?
@@ -41,7 +50,8 @@ capped AS (
     FROM m
 )
 SELECT c.me AS user_id, u.username AS username,
-       COUNT(*) AS matches, SUM(c.win) AS wins, COUNT(DISTINCT c.opp) AS opponents
+       COUNT(*) AS matches, SUM(c.win) AS wins, COUNT(DISTINCT c.opp) AS opponents,
+       SUM(c.hot) AS hot_time
 FROM capped c JOIN users u ON u.user_id = c.me
 WHERE c.rn <= ?
 GROUP BY c.me
@@ -86,6 +96,7 @@ async def get_monthly_mvp(month: str) -> dict:
         "matches": _top3(rows, "matches"),
         "wins": _top3(rows, "wins"),
         "opponents": _top3(rows, "opponents"),
+        "hot_time": _top3(rows, "hot_time"),
     }
 
 

@@ -122,7 +122,7 @@ async def handle_mvp(request: web.Request) -> web.Response:
         return web.json_response({"error": "取得に失敗しました。"}, status=500, headers=_cors_headers(request))
 
     body = {"month": month, "daily_pair_cap": db_manager.MVP_DAILY_PAIR_CAP}
-    for key in ("matches", "wins", "opponents"):
+    for key in ("matches", "wins", "opponents", "hot_time"):
         body[key] = [{"rank": e["rank"], "name": e["username"], "value": e["value"]} for e in mvp[key]]
     return web.json_response(body, headers=_cors_headers(request))
 

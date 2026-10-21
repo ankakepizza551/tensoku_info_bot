@@ -18,7 +18,11 @@ _CATEGORIES = [
     ("matches", "⚔️ 対戦数MVP", "戦"),
     ("wins", "🏆 勝利数MVP", "勝"),
     ("opponents", "🤝 対戦相手数MVP", "人"),
+    ("hot_time", "🔥 HOT TIME対戦数MVP", "戦"),
 ]
+
+# HOT TIMEを始める前の月にも空欄が並ばないよう、該当者がいないときは見出しごと出さない部門
+_HIDE_WHEN_EMPTY = {"hot_time"}
 
 
 def _previous_month(now: datetime.datetime) -> str:
@@ -34,6 +38,8 @@ def build_mvp_embed(mvp: dict) -> discord.Embed:
     )
     for key, title, unit in _CATEGORIES:
         entries = mvp[key]
+        if not entries and key in _HIDE_WHEN_EMPTY:
+            continue
         if entries:
             text = "\n".join(
                 f"{_MEDALS[e['rank']]} **{e['username']}** — {e['value']}{unit}" for e in entries
