@@ -1,8 +1,12 @@
+import datetime
+
 import aiosqlite
 
 from ._common import DB_PATH
 
 __all__ = [
+    "HOT_TIME_NAME",
+    "HOT_TIME_WEEKDAY",
     "HOT_TIME_KINDS",
     "set_hot_time_settings",
     "get_hot_time_settings",
@@ -11,7 +15,11 @@ __all__ = [
     "mark_hot_time_posted",
     "get_hot_time_summary",
     "count_recruiting_threads",
+    "get_hot_time_calendar_events",
 ]
+
+HOT_TIME_NAME = "コソ練広場 天則 HOT TIME"
+HOT_TIME_WEEKDAY = 3  # 木曜（月曜=0）
 
 # 自動投稿の種類（朝の予告・開始通知・終了後のまとめ）。各列には投稿済みのHOT TIME開催日（木曜, YYYY-MM-DD）を入れる
 HOT_TIME_KINDS = ("morning", "start", "summary")
@@ -114,3 +122,36 @@ async def count_recruiting_threads() -> int:
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("SELECT COUNT(*) FROM recruit_threads WHERE status = 'recruiting'") as cursor:
             return (await cursor.fetchone())[0]
+
+
+async def get_hot_time_calendar_events(guild_id: int | None, start: datetime.date, end: datetime.date) -> list[dict]:
+    """start〜end（end は含まない）のHOT TIMEを、カレンダーの予定と同じ形の dict で返す。
+    DBには保存しない予定なので、編集・削除の対象にはならない。
+    guild_id を指定するとそのサーバーでHOT TIMEが設定されているときだけ、None ならどこかで設定されていれば返す"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await _ensure_table(db)
+        if guild_id:
+            query, params = "SELECT 1 FROM hot_time_settings WHERE guild_id = ? LIMIT 1", (guild_id,)
+        else:
+            query, params = "SELECT 1 FROM hot_time_settings LIMIT 1", ()
+        async with db.execute(query, params) as cursor:
+            if await cursor.fetchone() is None:
+                return []
+
+    day = start + datetime.timedelta(days=(HOT_TIME_WEEKDAY - start.weekday()) % 7)
+    events = []
+    while day < end:
+        events.append({
+            # DBの予定（正の連番）と重ならないよう、日付から負のIDを作る
+            "event_id": -int(day.strftime("%Y%m%d")),
+            "date": day.strftime("%Y-%m-%d"),
+            "name": HOT_TIME_NAME,
+            "type": "online",
+            "time": "21:00〜24:00",
+            "location": None,
+            "url": None,
+            "hosted": "internal",
+            "recurring": True,
+        })
+        day += datetime.timedelta(days=7)
+    return events

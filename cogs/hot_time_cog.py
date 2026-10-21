@@ -11,8 +11,8 @@ logger = logging.getLogger("TensokuMatchBot")
 
 JST = datetime.timezone(datetime.timedelta(hours=9))
 
-HOT_TIME_NAME = "コソ練広場 天則 HOT TIME"
-HOT_TIME_WEEKDAY = 3  # 木曜（月曜=0）
+HOT_TIME_NAME = db_manager.HOT_TIME_NAME
+HOT_TIME_WEEKDAY = db_manager.HOT_TIME_WEEKDAY
 HOT_TIME_COLOR = discord.Color.from_rgb(231, 76, 60)
 
 # 開催日（木曜 0:00 JST）からの経過時間で、各投稿の予定時刻と締め切りを表す。
@@ -209,6 +209,16 @@ class HotTimeCog(commands.Cog):
     async def _before_post_hot_time(self):
         await self.bot.wait_until_ready()
 
+    async def _refresh_calendar(self, guild_id: int):
+        """カレンダーにHOT TIMEの予定を出し入れするため、設置済みのカレンダーを描き直す"""
+        cog = self.bot.cogs.get("CalendarCog")
+        if cog is None:
+            return
+        try:
+            await cog._refresh_calendar(guild_id)
+        except Exception as e:
+            logger.warning(f"HOT TIME設定後のカレンダー更新失敗 (guild={guild_id}): {e}")
+
     async def _post(self, setting: dict, kind: str, session: datetime.datetime):
         channel = self.bot.get_channel(setting["channel_id"])
         if channel is None:
@@ -252,6 +262,7 @@ class HotTimeCog(commands.Cog):
             f"✅ 毎週木曜の朝に予告、21:00に開始のお知らせ、24:00に結果のまとめを、{role_text}{channel.mention} へ投稿します。",
             ephemeral=True,
         )
+        await self._refresh_calendar(interaction.guild_id)
         logger.info(f"hot_time_setup: guild={interaction.guild_id} channel={channel.id} role={role.id if role else None}")
 
     @app_commands.command(
@@ -266,6 +277,7 @@ class HotTimeCog(commands.Cog):
             await interaction.response.send_message("✅ HOT TIMEのお知らせを止めました。", ephemeral=True)
         else:
             await interaction.response.send_message("HOT TIMEのお知らせは設定されていません。", ephemeral=True)
+        await self._refresh_calendar(interaction.guild_id)
         logger.info(f"hot_time_stop: guild={interaction.guild_id} deleted={deleted}")
 
     @app_commands.command(
