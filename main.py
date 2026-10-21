@@ -40,6 +40,7 @@ COGS = [
     "cogs.thread_index_cog",
     "cogs.event_reminder_cog",
     "cogs.mvp_cog",
+    "cogs.hot_time_cog",
     "cogs.promote_cog",
 ]
 

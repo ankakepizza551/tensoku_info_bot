@@ -20,6 +20,7 @@
 - [企画](#企画)
   - [SOKKUMAN](#sokkuman)
   - [陣取り戦](#陣取り戦)
+  - [天則 HOT TIME](#天則-hot-time)
 - [交流・投稿](#交流投稿)
   - [メインキャラ登録と分布](#メインキャラ登録と分布)
   - [記事投稿（フォーラム）](#記事投稿フォーラム)
@@ -43,6 +44,7 @@
 | 対戦募集（メッセージ式） | コマンド → ボタン | `/recruit` |
 | 戦績・スタッツ | コマンド | `/report` `/stats` `/leaderboard` |
 | 月間MVP | 毎月1日に自動投稿 | `/mvp` `/mvp_setup` `/mvp_panel` |
+| 天則 HOT TIME | 毎週木曜に自動でお知らせ・パネルのボタンで通知登録 | `/hot_time_result` |
 | SOKKUMAN | パネルのボタン | （管理者用のみ） |
 | 陣取り戦 | パネルのボタン | `/territory_register` `/territory_report` ほか |
 | メインキャラ | パネルのボタン | `/main_char` `/main_char_list` |
@@ -196,6 +198,23 @@
 - **公開設定（初回のみ）**: Railwayダッシュボードでこのサービスの「Settings」→「Networking」から Public Domain を発行してください。
 - **アクセス制限（任意）**: `.env` に `TERRITORY_OVERLAY_TOKEN=好きな文字列` を設定すると、URLに `&token=同じ文字列` を付けないと表示されなくなります。
 
+### 天則 HOT TIME
+
+毎週木曜 **21:00〜24:00** は「コソ練広場 天則 HOT TIME」です。みんなが同じ時間に集まって対戦できるよう、Botが自動でお知らせします。
+
+| 時刻 | 投稿内容 |
+|---|---|
+| 木曜 9:00 | 今夜HOT TIMEがあることの予告。通知ロールの登録ボタン付き |
+| 木曜 21:00 | 開始のお知らせ。有頂天の塔の待機人数と、対戦募集（フォーラム）の募集中の件数を表示 |
+| 金曜 0:00 | 結果のまとめ。対戦数・参加人数、対戦数トップ3、レート上昇トップ3 |
+
+- 予告と開始のお知らせでは、通知ロールをメンションします。ロールはパネルの「🔔 通知を受け取る」「🔕 通知をやめる」で、各自が付け外しできます。
+- まとめの対象は、21:00〜24:00に報告された確定済みの戦績です。24:00を過ぎてから報告した戦績は含まれません。
+- `/hot_time_result` で、前回の結果（開催中なら途中経過）をいつでも確認できます。
+- Botが止まっていて予定の時刻に投稿できなかった場合、予告は21:00まで、開始のお知らせは24:00まで、まとめは金曜12:00までに起動すればその時点で投稿します。
+
+管理者用: `/hot_time_setup`（投稿先チャンネルと通知ロールを設定）、`/hot_time_panel`（通知ロールのパネルを設置）、`/hot_time_stop`（自動投稿を止める）。設定した時点で予定時刻を過ぎているお知らせは、その週は投稿されません。通知ロールは、Botのロールより下に置いてください。メンションできない設定のロールを使う場合は、Botに「@everyone、@here、全てのロールにメンション」の権限が必要です。
+
 ---
 
 ## 交流・投稿
@@ -322,6 +341,7 @@
 | 記事投稿 | `/setup_article_panel` `/remove_article_panel` |
 | お便り | `/setup_letter_panel` `/tegami_check` `/tegami_reply` `/tegami_hide` `/tegami_unhide` |
 | カレンダー | `/calendar_setup` `/setup_event_panel` |
+| 天則 HOT TIME | `/hot_time_setup` `/hot_time_panel` `/hot_time_stop` |
 | その他 | `/setup_thread_index` `/remove_thread_index` `/pizza_panel` |
 
 ---
@@ -391,6 +411,7 @@ tensoku_info_bot/
 │   ├── stats_cog.py          # スタッツ・リーダーボード
 │   ├── raid_battle_cog.py    # SOKKUMAN
 │   ├── territory_cog.py      # 陣取り戦
+│   ├── hot_time_cog.py       # 天則 HOT TIME
 │   ├── main_char_cog.py      # メインキャラ登録・分布
 │   ├── forum_article_cog.py  # 記事投稿（フォーラム）
 │   ├── post_cog.py           # 簡易投稿・Embedビルダー
