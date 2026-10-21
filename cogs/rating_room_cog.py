@@ -10,6 +10,7 @@ from rating_ranks import get_rank, get_rank_info
 from rank_roles import sync_rank_role, ensure_all_rank_roles
 from cogs.report_cog import CHARACTERS
 from cogs.forum_recruit_cog import find_character
+from cogs.hot_time_cog import HOT_TIME_COLOR, hot_time_active
 
 logger = logging.getLogger("TensokuMatchBot")
 
@@ -115,10 +116,10 @@ async def _rating_stats_callback(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-def _build_queue_board_embed(guild: discord.Guild, queue: list) -> discord.Embed:
+def _build_queue_board_embed(guild: discord.Guild, queue: list, hot: bool = False) -> discord.Embed:
     embed = discord.Embed(
-        title="⏳ 有頂天の塔 待機状況",
-        color=discord.Color.from_rgb(155, 89, 182),
+        title="🔥 HOT TIME開催中！ 有頂天の塔 待機状況" if hot else "⏳ 有頂天の塔 待機状況",
+        color=HOT_TIME_COLOR if hot else discord.Color.from_rgb(155, 89, 182),
     )
     if not queue:
         embed.description = "現在、待機中のプレイヤーはいません。"
@@ -129,8 +130,39 @@ def _build_queue_board_embed(guild: discord.Guild, queue: list) -> discord.Embed
             name = member.display_name if member else f"User {q['user_id']}"
             lines.append(f"• {name}")
         embed.description = "\n".join(lines)
-    embed.set_footer(text=f"現在の待機人数: {len(queue)}人")
+    footer = f"現在の待機人数: {len(queue)}人"
+    if hot:
+        footer += " / HOT TIMEは24:00まで"
+    embed.set_footer(text=footer)
     return embed
+
+
+_RATING_PANEL_DESCRIPTION = (
+    "下のボタンから操作できます。\n"
+    "・📝 プロフィール登録/変更: 1戦目のキャラ等の登録・変更\n"
+    "・⚔️ キューに参加: マッチングキューに参加（希望レート差の範囲内で自動マッチング）\n"
+    "・🚪 キューから抜ける: キューをキャンセル\n"
+    "・📋 待機状況を見る: 現在の待機人数・待機者一覧を確認\n"
+    "・🎚 希望レート差を設定: マッチングを許容するレート差の範囲を変更\n"
+    "・🏆 レーティングスタッツ: レート・ランク・プロフィール・戦績を確認"
+)
+
+
+def _build_rating_panel_embed(hot: bool = False) -> discord.Embed:
+    if hot:
+        return discord.Embed(
+            title="🔥 HOT TIME開催中！ 有頂天の塔 操作パネル",
+            description=(
+                "**24:00までHOT TIME！** みんなが集まる時間なので、対戦相手が見つかりやすいです。\n\n"
+                + _RATING_PANEL_DESCRIPTION
+            ),
+            color=HOT_TIME_COLOR,
+        )
+    return discord.Embed(
+        title="⚔️ 有頂天の塔 操作パネル",
+        description=_RATING_PANEL_DESCRIPTION,
+        color=discord.Color.from_rgb(155, 89, 182),
+    )
 
 
 async def _sync_queue_board(bot: commands.Bot, guild: discord.Guild):
@@ -149,8 +181,9 @@ async def _sync_queue_board(bot: commands.Bot, guild: discord.Guild):
         return
 
     queue = await db_manager.get_rating_queue(guild.id)
+    hot = await hot_time_active(guild.id)
     try:
-        await message.edit(embed=_build_queue_board_embed(guild, queue))
+        await message.edit(embed=_build_queue_board_embed(guild, queue, hot))
     except discord.HTTPException as e:
         logger.warning(f"rating_queue_board 更新失敗: {e}")
 
@@ -169,9 +202,10 @@ async def _notify_queue_start(
 
     mention_role_id = settings.get("mention_role_id")
     mention = f"<@&{mention_role_id}> " if mention_role_id else ""
+    hot_tag = "🔥 HOT TIME開催中！ " if await hot_time_active(guild.id) else ""
     try:
         await channel.send(
-            f"{mention}⚔️ {user.mention} が有頂天の塔で対戦相手を募集中です！\n"
+            f"{mention}{hot_tag}⚔️ {user.mention} が有頂天の塔で対戦相手を募集中です！\n"
             "`/rating_queue_join` で参加すると自動でマッチングされます。"
         )
     except discord.HTTPException as e:
@@ -799,6 +833,23 @@ class RatingRoomCog(commands.Cog):
         if restored:
             logger.info(f"rating_room: スレッドパネル {restored} 件のViewを再登録")
 
+    async def refresh_hot_time_display(self, guild: discord.Guild):
+        """HOT TIMEの開始・終了時に、操作パネルと待機状況ボードの見た目を切り替える"""
+        hot = await hot_time_active(guild.id)
+        for panel in await db_manager.get_rating_panels(guild.id):
+            channel = guild.get_channel_or_thread(panel["channel_id"])
+            if not isinstance(channel, (discord.TextChannel, discord.Thread)):
+                continue
+            try:
+                message = await channel.fetch_message(panel["message_id"])
+                await message.edit(embed=_build_rating_panel_embed(hot))
+            except discord.NotFound:
+                # 削除されたパネルは記録からも外す
+                await db_manager.delete_rating_panel(panel["message_id"])
+            except discord.HTTPException as e:
+                logger.warning(f"rating_panel 更新失敗 (message={panel['message_id']}): {e}")
+        await _sync_queue_board(self.bot, guild)
+
         # 常設操作パネル（固定custom_idのため、メッセージ単位の紐付けなしでグローバル登録できる）
         self.bot.add_view(RatingPanelView(self))
 
@@ -1106,7 +1157,7 @@ class RatingRoomCog(commands.Cog):
         self, interaction: discord.Interaction, channel: discord.TextChannel | discord.Thread
     ):
         queue = await db_manager.get_rating_queue(interaction.guild_id)
-        embed = _build_queue_board_embed(interaction.guild, queue)
+        embed = _build_queue_board_embed(interaction.guild, queue, await hot_time_active(interaction.guild_id))
 
         try:
             board_msg = await channel.send(embed=embed)
@@ -1140,28 +1191,17 @@ class RatingRoomCog(commands.Cog):
         interaction: discord.Interaction,
         channel: discord.TextChannel | discord.Thread,
     ):
-        embed = discord.Embed(
-            title="⚔️ 有頂天の塔 操作パネル",
-            description=(
-                "下のボタンから操作できます。\n"
-                "・📝 プロフィール登録/変更: 1戦目のキャラ等の登録・変更\n"
-                "・⚔️ キューに参加: マッチングキューに参加（希望レート差の範囲内で自動マッチング）\n"
-                "・🚪 キューから抜ける: キューをキャンセル\n"
-                "・📋 待機状況を見る: 現在の待機人数・待機者一覧を確認\n"
-                "・🎚 希望レート差を設定: マッチングを許容するレート差の範囲を変更\n"
-                "・🏆 レーティングスタッツ: レート・ランク・プロフィール・戦績を確認"
-            ),
-            color=discord.Color.from_rgb(155, 89, 182),
-        )
+        embed = _build_rating_panel_embed(await hot_time_active(interaction.guild_id))
 
         try:
-            await channel.send(embed=embed, view=RatingPanelView(self))
+            panel_msg = await channel.send(embed=embed, view=RatingPanelView(self))
         except discord.Forbidden:
             await interaction.response.send_message(
                 f"❌ {channel.mention} にメッセージを送信する権限がありません。", ephemeral=True
             )
             return
 
+        await db_manager.save_rating_panel(panel_msg.id, interaction.guild_id, channel.id)
         await interaction.response.send_message(
             f"✅ 操作パネルを {channel.mention} に設置しました。", ephemeral=True
         )

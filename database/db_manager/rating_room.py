@@ -21,6 +21,9 @@ __all__ = [
     "get_rating_settings",
     "save_rating_queue_board",
     "get_rating_queue_board",
+    "save_rating_panel",
+    "get_rating_panels",
+    "delete_rating_panel",
 ]
 
 
@@ -217,3 +220,24 @@ async def get_rating_queue_board(guild_id: int) -> dict | None:
         ) as cursor:
             row = await cursor.fetchone()
         return dict(row) if row else None
+
+async def save_rating_panel(message_id: int, guild_id: int, channel_id: int) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO rating_panels (message_id, guild_id, channel_id) VALUES (?, ?, ?)",
+            (message_id, guild_id, channel_id),
+        )
+        await db.commit()
+
+async def get_rating_panels(guild_id: int) -> list:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM rating_panels WHERE guild_id = ?", (guild_id,)
+        ) as cursor:
+            return [dict(r) for r in await cursor.fetchall()]
+
+async def delete_rating_panel(message_id: int) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM rating_panels WHERE message_id = ?", (message_id,))
+        await db.commit()
