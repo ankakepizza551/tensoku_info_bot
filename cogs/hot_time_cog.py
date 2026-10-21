@@ -27,6 +27,9 @@ _HOT_TIME_END = datetime.timedelta(hours=24)
 
 _MEDALS = {1: "🥇", 2: "🥈", 3: "🥉"}
 
+# 開始のお知らせでメンションする「今夜行けます」の人数の上限（メッセージの文字数制限に収めるため）
+_RSVP_MENTION_LIMIT = 50
+
 
 def _session_start(now: datetime.datetime) -> datetime.datetime:
     """now 時点で直近の開催日（今日が木曜なら今日）の 0:00 JST を返す"""
@@ -67,18 +70,33 @@ def _top3(rows: list[dict], key: str) -> list[dict]:
     return result
 
 
-def build_morning_embed() -> discord.Embed:
-    return discord.Embed(
+def _rsvp_members(guild: discord.Guild, user_ids: list[int]) -> list[discord.Member]:
+    """「今夜行けます」を押した人のうち、まだサーバーにいる人"""
+    return [m for m in (guild.get_member(uid) for uid in user_ids) if m is not None]
+
+
+def build_morning_embed(rsvps: list[discord.Member] | None = None) -> discord.Embed:
+    rsvps = rsvps or []
+    embed = discord.Embed(
         title=f"🔥 今夜は {HOT_TIME_NAME}！",
         description=(
             "本日 **21:00〜24:00** は HOT TIME です。\n"
-            "みんなで集まって対戦しましょう！有頂天の塔や対戦募集をどんどん使ってください。"
+            "みんなで集まって対戦しましょう！有頂天の塔や対戦募集をどんどん使ってください。\n"
+            "行けそうな人は「🙋 今夜行けます」を押してください。21:00にメンションでお知らせします。"
         ),
         color=HOT_TIME_COLOR,
     )
+    if rsvps:
+        names = "、".join(m.display_name for m in rsvps)
+        if len(names) > 1024:
+            names = names[:1021] + "…"
+    else:
+        names = "まだいません。一番乗りしませんか？"
+    embed.add_field(name=f"🙋 今夜行けます: {len(rsvps)}人", value=names, inline=False)
+    return embed
 
 
-async def build_start_embed(guild: discord.Guild) -> discord.Embed:
+async def build_start_embed(guild: discord.Guild, rsvp_count: int = 0) -> discord.Embed:
     queue = await db_manager.get_rating_queue(guild.id)
     recruiting = await db_manager.count_recruiting_threads()
     embed = discord.Embed(
@@ -88,6 +106,7 @@ async def build_start_embed(guild: discord.Guild) -> discord.Embed:
     )
     embed.add_field(name="🗼 有頂天の塔 待機中", value=f"{len(queue)}人", inline=True)
     embed.add_field(name="📣 対戦募集 募集中", value=f"{recruiting}件", inline=True)
+    embed.add_field(name="🙋 今夜行けます", value=f"{rsvp_count}人", inline=True)
     return embed
 
 
@@ -141,7 +160,7 @@ class HotTimeRoleView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="通知を受け取る", emoji="🔔", style=discord.ButtonStyle.primary, custom_id="hot_time_role_add")
+    @discord.ui.button(label="通知を受け取る", emoji="🔔", style=discord.ButtonStyle.primary, custom_id="hot_time_role_add", row=1)
     async def add_role(self, interaction: discord.Interaction, button: discord.ui.Button):
         role = await _get_notify_role(interaction)
         if role is None:
@@ -160,7 +179,7 @@ class HotTimeRoleView(discord.ui.View):
             f"🔔 {role.mention} を付けました。毎週木曜の朝と21:00にお知らせします。", ephemeral=True
         )
 
-    @discord.ui.button(label="通知をやめる", emoji="🔕", style=discord.ButtonStyle.secondary, custom_id="hot_time_role_remove")
+    @discord.ui.button(label="通知をやめる", emoji="🔕", style=discord.ButtonStyle.secondary, custom_id="hot_time_role_remove", row=1)
     async def remove_role(self, interaction: discord.Interaction, button: discord.ui.Button):
         role = await _get_notify_role(interaction)
         if role is None:
@@ -178,14 +197,65 @@ class HotTimeRoleView(discord.ui.View):
         await interaction.response.send_message(f"🔕 {role.mention} を外しました。", ephemeral=True)
 
 
+class HotTimeMorningView(HotTimeRoleView):
+    """朝の予告に付けるボタン。「今夜行けます」の登録・取り消しと、通知ロールの付け外し"""
+
+    def __init__(self, include_role: bool = True):
+        super().__init__()
+        if not include_role:
+            self.remove_item(self.add_role)
+            self.remove_item(self.remove_role)
+
+    async def _session_date(self, interaction: discord.Interaction) -> str | None:
+        """押された予告の開催日。その回の受付が終わっていれば、その旨を返信して None を返す"""
+        now = datetime.datetime.now(JST)
+        session = _session_start(interaction.message.created_at)
+        if session != _session_start(now) or now >= session + _HOT_TIME_END:
+            await interaction.response.send_message("この回のHOT TIMEの受付は終了しました。", ephemeral=True)
+            return None
+        return session.strftime("%Y-%m-%d")
+
+    async def _update_message(self, interaction: discord.Interaction, session_date: str):
+        user_ids = await db_manager.get_hot_time_rsvps(interaction.guild_id, session_date)
+        try:
+            await interaction.message.edit(embed=build_morning_embed(_rsvp_members(interaction.guild, user_ids)))
+        except discord.HTTPException as e:
+            logger.warning(f"HOT TIME予告の更新失敗 (message={interaction.message.id}): {e}")
+
+    @discord.ui.button(label="今夜行けます", emoji="🙋", style=discord.ButtonStyle.success, custom_id="hot_time_rsvp_add", row=0)
+    async def add_rsvp(self, interaction: discord.Interaction, button: discord.ui.Button):
+        session_date = await self._session_date(interaction)
+        if session_date is None:
+            return
+        added = await db_manager.add_hot_time_rsvp(interaction.guild_id, session_date, interaction.user.id)
+        if not added:
+            await interaction.response.send_message("すでに「今夜行けます」を登録しています。", ephemeral=True)
+            return
+        await interaction.response.send_message("🙋 登録しました！21:00にメンションでお知らせします。", ephemeral=True)
+        await self._update_message(interaction, session_date)
+
+    @discord.ui.button(label="取り消す", style=discord.ButtonStyle.secondary, custom_id="hot_time_rsvp_remove", row=0)
+    async def remove_rsvp(self, interaction: discord.Interaction, button: discord.ui.Button):
+        session_date = await self._session_date(interaction)
+        if session_date is None:
+            return
+        removed = await db_manager.remove_hot_time_rsvp(interaction.guild_id, session_date, interaction.user.id)
+        if not removed:
+            await interaction.response.send_message("「今夜行けます」は登録していません。", ephemeral=True)
+            return
+        await interaction.response.send_message("取り消しました。", ephemeral=True)
+        await self._update_message(interaction, session_date)
+
+
 class HotTimeCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
     @commands.Cog.listener()
     async def on_ready(self):
-        """Bot起動・再接続時に常設パネルのViewを再登録する"""
-        self.bot.add_view(HotTimeRoleView())
+        """Bot起動・再接続時に常設パネルのViewを再登録する。
+        HotTimeMorningView は通知ロールのボタンも含むので、常設パネルのボタンもこれで動く"""
+        self.bot.add_view(HotTimeMorningView())
 
     async def cog_load(self):
         if not self._post_hot_time.is_running():
@@ -261,10 +331,18 @@ class HotTimeCog(commands.Cog):
             kwargs["allowed_mentions"] = discord.AllowedMentions(roles=[role])
         if kind == "morning":
             embed = build_morning_embed()
-            if role is not None:
-                kwargs["view"] = HotTimeRoleView()
+            kwargs["view"] = HotTimeMorningView(include_role=role is not None)
         else:
-            embed = await build_start_embed(channel.guild)
+            # 「今夜行けます」を押した人には、通知ロールの有無にかかわらずメンションで知らせる
+            user_ids = await db_manager.get_hot_time_rsvps(channel.guild.id, session.strftime("%Y-%m-%d"))
+            members = _rsvp_members(channel.guild, user_ids)
+            embed = await build_start_embed(channel.guild, len(members))
+            mentioned = members[:_RSVP_MENTION_LIMIT]
+            if mentioned:
+                kwargs["content"] = " ".join(filter(None, [kwargs.get("content"), *(m.mention for m in mentioned)]))
+                kwargs["allowed_mentions"] = discord.AllowedMentions(
+                    roles=[role] if role is not None else False, users=mentioned
+                )
         await channel.send(embed=embed, **kwargs)
 
     @app_commands.command(

@@ -17,6 +17,9 @@ __all__ = [
     "get_hot_time_summary",
     "count_recruiting_threads",
     "get_hot_time_calendar_events",
+    "add_hot_time_rsvp",
+    "remove_hot_time_rsvp",
+    "get_hot_time_rsvps",
 ]
 
 HOT_TIME_NAME = "コソ練広場 天則 HOT TIME"
@@ -157,3 +160,51 @@ async def get_hot_time_calendar_events(guild_id: int | None, start: datetime.dat
         })
         day += datetime.timedelta(days=7)
     return events
+
+
+async def _ensure_rsvp_table(db):
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS hot_time_rsvps (
+            guild_id INTEGER NOT NULL,
+            session_date TEXT NOT NULL,
+            user_id INTEGER NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (guild_id, session_date, user_id)
+        )
+    """)
+
+
+async def add_hot_time_rsvp(guild_id: int, session_date: str, user_id: int) -> bool:
+    """開催日 session_date（YYYY-MM-DD）に「今夜行けます」を登録する。すでに登録済みなら False。
+    前回までの登録はもう使わないので、ここで消しておく"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await _ensure_rsvp_table(db)
+        await db.execute("DELETE FROM hot_time_rsvps WHERE session_date < ?", (session_date,))
+        cursor = await db.execute(
+            "INSERT OR IGNORE INTO hot_time_rsvps (guild_id, session_date, user_id) VALUES (?, ?, ?)",
+            (guild_id, session_date, user_id),
+        )
+        await db.commit()
+        return cursor.rowcount > 0
+
+
+async def remove_hot_time_rsvp(guild_id: int, session_date: str, user_id: int) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await _ensure_rsvp_table(db)
+        cursor = await db.execute(
+            "DELETE FROM hot_time_rsvps WHERE guild_id = ? AND session_date = ? AND user_id = ?",
+            (guild_id, session_date, user_id),
+        )
+        await db.commit()
+        return cursor.rowcount > 0
+
+
+async def get_hot_time_rsvps(guild_id: int, session_date: str) -> list[int]:
+    """「今夜行けます」を押した人のユーザーIDを、押した順に返す"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await _ensure_rsvp_table(db)
+        async with db.execute(
+            "SELECT user_id FROM hot_time_rsvps WHERE guild_id = ? AND session_date = ? ORDER BY created_at, rowid",
+            (guild_id, session_date),
+        ) as cursor:
+            return [row[0] for row in await cursor.fetchall()]
