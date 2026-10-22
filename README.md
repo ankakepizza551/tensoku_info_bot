@@ -362,7 +362,7 @@
 |---|---|
 | `sync` | スラッシュコマンドをグローバルに同期（反映まで最大1時間） |
 | `sync guild` | 現在のサーバーにだけ即時同期 |
-| `db_backup` | データベースのバックアップファイルを送信 |
+| `db_backup` | データベースのバックアップファイルを送信（自動バックアップとは別に、今すぐ取りたいとき） |
 | `bot_status` | 接続サーバー数、レイテンシ、稼働中のCogを表示 |
 
 ### スラッシュコマンド（管理者用）
@@ -404,6 +404,7 @@ DISCORD_TOKEN=Botのトークン
 BOT_PREFIX=!
 DB_PATH=data/tensoku_stats.db
 LETTER_ADMIN_CHANNEL_ID=お便りの送信先チャンネルID（数字）
+DB_BACKUP_CHANNEL_ID=自動バックアップの送信先チャンネルID（数字・管理者だけが見られるチャンネル）
 SERVER_INVITE_URL=https://discord.gg/xxxxxxxx
 TERRITORY_OVERLAY_TOKEN=（任意）配信オーバーレイ用のアクセス制限トークン
 ```
@@ -414,6 +415,7 @@ TERRITORY_OVERLAY_TOKEN=（任意）配信オーバーレイ用のアクセス�
 | `BOT_PREFIX` | オーナー用プレフィックスコマンドの接頭辞（未設定時は `/`） |
 | `DB_PATH` | SQLiteのパス。未設定時は `data/tensoku_stats.db` |
 | `LETTER_ADMIN_CHANNEL_ID` | お便りと確認ログの送信先 |
+| `DB_BACKUP_CHANNEL_ID` | データベースの自動バックアップの送信先。**管理者だけが見られるチャンネル**にする（`@everyone` が見られると送信しない）。未設定なら自動バックアップしない |
 | `SERVER_INVITE_URL` | `/promote` で使う招待リンク |
 | `CALENDAR_EDITOR_ROLE_ID` | （任意）カレンダーの予定を編集できる追加ロールのID。未設定ならサーバー管理権限を持つ人だけ |
 | `CALENDAR_WEB_URL` | カレンダーの下に出す「Web版を開く」ボタンのURL。未設定ならWeb版カレンダーのURL、空にするとボタンなし |
@@ -427,6 +429,14 @@ python main.py
 ```
 
 起動するとSQLiteのデータベースが自動作成・初期化されます。起動後、オーナーアカウントから `!sync guild` を送信してスラッシュコマンドを同期してください。
+
+### データベースの自動バックアップ
+
+`DB_BACKUP_CHANNEL_ID` を設定すると、毎日 4:00（JST）にデータベースのバックアップ（`tensoku_stats_backup_日時.db.gz`）をそのチャンネルに送ります。
+起動したときに最後のバックアップから 24 時間以上たっていれば、すぐに 1 回送ります（4:00 に Bot が止まっていた日の分）。
+稼働中でも書き込み途中の状態を写さないよう、SQLite のバックアップ機能でコピーしています。
+
+戻すときは、ファイルをダウンロードして展開し（`gunzip tensoku_stats_backup_….db.gz`）、Bot を止めてから `DB_PATH` の場所（Railway では `/app/data/tensoku_stats.db`）に置いて起動します。
 
 ### Railway で運用する場合
 
@@ -457,6 +467,7 @@ tensoku_info_bot/
 │   ├── event_reminder_cog.py # イベントリマインダー
 │   ├── thread_index_cog.py   # スレッド一覧ボード
 │   ├── promote_cog.py        # サーバー宣伝
+│   ├── backup_cog.py         # データベースの自動バックアップ
 │   ├── dice_cog.py           # ダイス
 │   └── pizza_cog.py          # ピザメニュー
 ├── database/
