@@ -1,9 +1,6 @@
 import asyncio
-import datetime
 import logging
 import os
-import sqlite3
-import tempfile
 import discord
 from discord.ext import commands
 import config
@@ -42,6 +39,7 @@ COGS = [
     "cogs.mvp_cog",
     "cogs.hot_time_cog",
     "cogs.promote_cog",
+    "cogs.backup_cog",
 ]
 
 # インテントの設定
@@ -98,26 +96,12 @@ async def sync(ctx, target: str = None):
 @commands.is_owner()
 async def db_backup(ctx):
     """データベースのバックアップファイルをこのチャンネルに送信します (Botのオーナー専用)"""
-    def make_backup() -> str:
-        tmp_path = os.path.join(
-            tempfile.gettempdir(),
-            f"tensoku_stats_backup_{datetime.datetime.now():%Y%m%d_%H%M%S}.db",
-        )
-        src = sqlite3.connect(config.DB_PATH)
-        try:
-            dst = sqlite3.connect(tmp_path)
-            try:
-                src.backup(dst)
-            finally:
-                dst.close()
-        finally:
-            src.close()
-        return tmp_path
+    from database.backup import create_backup_file
 
     await ctx.send("バックアップを作成中...")
     tmp_path = None
     try:
-        tmp_path = await asyncio.to_thread(make_backup)
+        tmp_path = await asyncio.to_thread(create_backup_file)
         await ctx.send(file=discord.File(tmp_path, filename="tensoku_stats_backup.db"))
         logger.info(f"db_backup: by user={ctx.author.id}")
     except Exception as e:

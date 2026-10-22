@@ -19,6 +19,8 @@ def _parse_channel_id(env_key: str) -> int:
         return 0
 
 LETTER_ADMIN_CHANNEL_ID = _parse_channel_id("LETTER_ADMIN_CHANNEL_ID")
+# データベースの自動バックアップの送信先（管理者だけが見られるチャンネル。未設定なら自動バックアップしない）
+DB_BACKUP_CHANNEL_ID = _parse_channel_id("DB_BACKUP_CHANNEL_ID")
 # カレンダーの予定を編集できる追加ロール（未設定なら、サーバー管理権限を持つ人だけ）
 CALENDAR_EDITOR_ROLE_ID = _parse_channel_id("CALENDAR_EDITOR_ROLE_ID")
 # カレンダー下に表示する「Web版を開く」ボタンのURL（空にするとボタンを出さない）
