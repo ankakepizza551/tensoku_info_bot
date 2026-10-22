@@ -249,7 +249,7 @@
 - `/hot_time_setup` を行うと、イベントカレンダーと公開サイトのカレンダーにも、毎週木曜のHOT TIMEが 🔥 で表示されます。これは毎週の予定として自動で表示するもので、カレンダーの編集・削除の対象にはなりません。`/hot_time_stop` で表示も消えます。
 - Botが止まっていて予定の時刻に投稿できなかった場合、予告は21:00まで、開始のお知らせは24:00まで、まとめは金曜12:00までに起動すればその時点で投稿します。
 
-管理者用: `/hot_time_setup`（投稿先チャンネルと通知ロールを設定）、`/hot_time_panel`（通知ロールのパネルを設置）、`/hot_time_stop`（自動投稿を止める）。設定した時点で予定時刻を過ぎているお知らせは、その週は投稿されません。通知ロールは、Botのロールより下に置いてください。メンションできない設定のロールを使う場合は、Botに「@everyone、@here、全てのロールにメンション」の権限が必要です。
+管理者用: `/hot_time_setup`（投稿先チャンネルと通知ロールを設定）、`/hot_time_panel`（通知ロールのパネルを設置）、`/hot_time_post`（予告・開始のお知らせ・結果のまとめを今すぐ投稿。自動投稿とは別に出ます。予告は「今夜行けます」の受付がその日の24:00までのため、木曜にだけ投稿できます）、`/hot_time_stop`（自動投稿を止める）。設定した時点で予定時刻を過ぎているお知らせは、その週は自動では投稿されないので、必要なら `/hot_time_post` で出してください。通知ロールは、Botのロールより下に置いてください。メンションできない設定のロールを使う場合は、Botに「@everyone、@here、全てのロールにメンション」の権限が必要です。
 
 ---
 
@@ -377,7 +377,7 @@
 | 記事投稿 | `/setup_article_panel` `/remove_article_panel` |
 | お便り | `/setup_letter_panel` `/tegami_check` `/tegami_reply` `/tegami_hide` `/tegami_unhide` |
 | カレンダー | `/calendar_setup` `/setup_event_panel` |
-| 天則 HOT TIME | `/hot_time_setup` `/hot_time_panel` `/hot_time_stop` |
+| 天則 HOT TIME | `/hot_time_setup` `/hot_time_panel` `/hot_time_post` `/hot_time_stop` |
 | その他 | `/setup_thread_index` `/remove_thread_index` `/pizza_panel` |
 
 ---

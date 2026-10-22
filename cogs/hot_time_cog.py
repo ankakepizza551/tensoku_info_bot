@@ -315,15 +315,18 @@ class HotTimeCog(commands.Cog):
         except Exception as e:
             logger.warning(f"HOT TIME設定後のカレンダー更新失敗 (guild={guild_id}): {e}")
 
-    async def _post(self, setting: dict, kind: str, session: datetime.datetime):
+    async def _post(
+        self, setting: dict, kind: str, session: datetime.datetime, until: datetime.datetime | None = None
+    ) -> discord.abc.Messageable:
+        """お知らせを1件投稿し、投稿先のチャンネルを返す。until はまとめを途中経過にするときに渡す"""
         channel = self.bot.get_channel(setting["channel_id"])
         if channel is None:
             raise RuntimeError(f"チャンネルが見つかりません: {setting['channel_id']}")
         role = channel.guild.get_role(setting["role_id"]) if setting["role_id"] else None
 
         if kind == "summary":
-            await channel.send(embed=await build_summary_embed(session))
-            return
+            await channel.send(embed=await build_summary_embed(session, until=until))
+            return channel
 
         kwargs = {}
         if role is not None:
@@ -344,6 +347,7 @@ class HotTimeCog(commands.Cog):
                     roles=[role] if role is not None else False, users=mentioned
                 )
         await channel.send(embed=embed, **kwargs)
+        return channel
 
     @app_commands.command(
         name="hot_time_setup",
@@ -410,6 +414,48 @@ class HotTimeCog(commands.Cog):
         await interaction.channel.send(embed=embed, view=HotTimeRoleView())
         await interaction.response.send_message("✅ パネルを設置しました。", ephemeral=True)
         logger.info(f"hot_time_panel: guild={interaction.guild_id} channel={interaction.channel_id}")
+
+    @app_commands.command(
+        name="hot_time_post",
+        description="HOT TIMEのお知らせを今すぐ投稿します。自動投稿とは別に出ます（管理者のみ）",
+    )
+    @app_commands.describe(kind="投稿するお知らせ")
+    @app_commands.choices(kind=[
+        app_commands.Choice(name="予告（🙋 今夜行けます ボタン付き）", value="morning"),
+        app_commands.Choice(name="開始のお知らせ", value="start"),
+        app_commands.Choice(name="結果のまとめ（開催中なら途中経過）", value="summary"),
+    ])
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.guild_only()
+    async def hot_time_post(self, interaction: discord.Interaction, kind: app_commands.Choice[str]):
+        setting = await db_manager.get_hot_time_setting(interaction.guild_id)
+        if not setting:
+            await interaction.response.send_message(
+                "❌ 先に `/hot_time_setup` で投稿先を設定してください。", ephemeral=True
+            )
+            return
+        now = datetime.datetime.now(JST)
+        session = _session_start(now)
+        if kind.value == "morning" and now.weekday() != HOT_TIME_WEEKDAY:
+            # 予告の「今夜行けます」は、その週の木曜24:00までしか受け付けないため
+            await interaction.response.send_message(
+                "❌ 予告は木曜にだけ投稿できます（「今夜行けます」ボタンがその日の24:00までしか使えないため）。",
+                ephemeral=True,
+            )
+            return
+        if kind.value == "summary" and now < session + _HOT_TIME_START:
+            # 今週の開始前なら前回分
+            session -= datetime.timedelta(days=7)
+
+        await interaction.response.defer(ephemeral=True)
+        try:
+            channel = await self._post(setting, kind.value, session, until=now if kind.value == "summary" else None)
+        except Exception as e:
+            logger.warning(f"hot_time_post失敗 (guild={interaction.guild_id}, kind={kind.value}): {e}")
+            await interaction.followup.send(f"❌ 投稿できませんでした: {e}", ephemeral=True)
+            return
+        await interaction.followup.send(f"✅ {kind.name}を {channel.mention} に投稿しました。", ephemeral=True)
+        logger.info(f"hot_time_post: guild={interaction.guild_id} kind={kind.value} by user={interaction.user.id}")
 
     @app_commands.command(
         name="hot_time_result",
