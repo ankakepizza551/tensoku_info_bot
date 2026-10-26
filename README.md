@@ -317,7 +317,7 @@
 |---|---|
 | イベントカレンダー | 月表示のカレンダー。ボタンで前月・今月・翌月を切り替え。パネルの「🟢 オン大会を追加」「🔴 オフ大会を追加」「🗑️ イベントを削除」から、日付・大会名・開始時間・場所・詳細URLを登録・削除できます。コマンド: `/add_event` `/remove_event`。**予定の追加・削除は、サーバー管理権限を持つ人だけ**が行えます（`CALENDAR_EDITOR_ROLE_ID` でロールを追加可）。管理者用: `/calendar_setup` `/setup_event_panel` |
 | イベントリマインダー | スレッド内で `/set_reminder` を使うと、指定した日時に通知します。`/list_reminders` で一覧、`/cancel_reminder` で削除 |
-| スレッド一覧ボード | `/setup_thread_index` で、指定チャンネルのアクティブなスレッド一覧を自動更新するボードを設置。`/remove_thread_index` で削除 |
+| スレッド一覧ボード | `/setup_thread_index` で、指定チャンネルのアクティブなスレッド一覧を自動更新するボードを設置。スレッド名の先頭の日付（例: `12/12土 21:00- 〇〇`）を読んで開催日が近い順に並べ、日付のないスレッドは最後に表示します。`/remove_thread_index` で削除 |
 | サーバー宣伝 | `/promote` でX（旧Twitter）に投稿するためのボタンを表示。投稿はユーザー自身のXから行われます（`SERVER_INVITE_URL` の設定が必要） |
 | ダイス | `/roll 2d6`、`/roll 1d100` など |
 | ピザメニュー | `/pizza_panel` でパネルを設置。「メニュー追加」「メニュー削除」「メニューを見る」「ピザを焼く」。コマンド: `/pizza_add` `/pizza_random` `/pizza_list` `/pizza_delete` |
