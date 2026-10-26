@@ -1,4 +1,6 @@
+import datetime
 import logging
+import re
 
 import discord
 from discord import app_commands
@@ -11,12 +13,38 @@ logger = logging.getLogger("TensokuMatchBot")
 _MAX_LISTED_THREADS = 30
 
 
-def _sort_key(thread: discord.Thread):
+# スレッド名の先頭の「12/12」のような開催日
+_EVENT_DATE_PATTERN = re.compile(r"^\s*(\d{1,2})\s*[/／]\s*(\d{1,2})")
+
+
+def _created_at(thread: discord.Thread) -> datetime.datetime:
     return thread.created_at or discord.utils.snowflake_time(thread.id)
 
 
+def _event_date(thread: discord.Thread) -> datetime.date | None:
+    """スレッド名の先頭から開催日を読む。年は書かれていないので、作成日より前なら翌年とみなす"""
+    match = _EVENT_DATE_PATTERN.match(thread.name)
+    if not match:
+        return None
+    created = _created_at(thread).date()
+    month, day = int(match.group(1)), int(match.group(2))
+    try:
+        date = datetime.date(created.year, month, day)
+        if date < created - datetime.timedelta(days=31):
+            date = datetime.date(created.year + 1, month, day)
+    except ValueError:
+        return None
+    return date
+
+
+def _sort_key(thread: discord.Thread):
+    """開催日が早い順。開催日が読めないスレッドは後ろに、作成が古い順で並べる"""
+    date = _event_date(thread)
+    return (date is None, date or datetime.date.min, _created_at(thread))
+
+
 def _build_thread_index_embed(channel: discord.TextChannel) -> discord.Embed:
-    threads = sorted(channel.threads, key=_sort_key, reverse=True)
+    threads = sorted(channel.threads, key=_sort_key)
 
     embed = discord.Embed(
         title="🧵 進行中のスレッド一覧",
@@ -28,13 +56,14 @@ def _build_thread_index_embed(channel: discord.TextChannel) -> discord.Embed:
     else:
         lines = []
         for thread in threads[:_MAX_LISTED_THREADS]:
-            created = discord.utils.format_dt(_sort_key(thread), style="d")
+            created = discord.utils.format_dt(_created_at(thread), style="d")
             lines.append(f"• {thread.mention}（{created}）")
         if len(threads) > _MAX_LISTED_THREADS:
             lines.append(f"\n…ほか {len(threads) - _MAX_LISTED_THREADS} 件")
-        embed.description = "\n".join(lines)
+        # スマホでタップしやすいよう、1行ずつ空ける
+        embed.description = "\n\n".join(lines)
 
-    embed.set_footer(text="新しい順・自動更新（終了/アーカイブされたスレッドは一覧から消えます）")
+    embed.set_footer(text="開催日が近い順・自動更新（終了/アーカイブされたスレッドは一覧から消えます）")
     return embed
 
 
