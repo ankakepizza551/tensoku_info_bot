@@ -21,6 +21,7 @@
   - [SOKKUMAN](#sokkuman)
   - [陣取り戦](#陣取り戦)
   - [天則 HOT TIME](#天則-hot-time)
+  - [カードBAN10先](#カードban10先)
 - [交流・投稿](#交流投稿)
   - [メインキャラ登録と分布](#メインキャラ登録と分布)
   - [記事投稿（フォーラム）](#記事投稿フォーラム)
@@ -47,6 +48,7 @@
 | 天則 HOT TIME | 毎週木曜に自動でお知らせ・パネルのボタンで通知登録 | `/hot_time_result` |
 | SOKKUMAN | パネルのボタン | （管理者用のみ） |
 | 陣取り戦 | パネルのボタン | `/territory_register` `/territory_report` ほか |
+| カードBAN10先 | パネル・対戦スレッドのボタン | `/cardban_cards` `/cardban_status` |
 | メインキャラ | パネルのボタン | `/main_char` `/main_char_list` |
 | 記事投稿 | パネルのボタン | （管理者用のみ） |
 | 簡易投稿 | コマンド → モーダル | `/post` `/forum_post` `/embed_builder` |
@@ -253,6 +255,51 @@
 
 ---
 
+### カードBAN10先
+
+先に **10勝** した方が勝ち。1戦ごとに、**勝った方が負けた方のカードを1枚使用不可（BAN）** にしていく1vs1の企画です。
+
+- BANはスペル・スキル・システムカードすべてが対象で、喜怒哀楽すべてのデッキから取り除きます
+- キャラ変更はなし（エントリー時に決めたキャラで最後まで）
+- 先取数・1戦ごとのBAN枚数は `/cardban_config` で変更できます。「銭」のように最初から抜いておくカードは `/cardban_preban` で指定します
+
+**パネルのボタン**（`/setup_cardban_panel` で設置。対戦スレッドはこのチャンネルに作られます）
+
+| ボタン | 動作 |
+|---|---|
+| 🙋 エントリー | 使用キャラを選んで対戦待ちに入る |
+| 🎲 自動マッチング | いちばん長く待っている人とすぐに対戦を組む |
+| 🤝 相手を指名 | エントリー済みの人に申し込む（相手が「✅ 受ける」を押すと成立） |
+| 👋 エントリー取消 | 対戦待ちをやめる |
+
+パネルには対戦待ちの人と進行中の対戦（スコア）が表示されます。
+
+**対戦スレッドのボタン**（対戦ごとに自動で作られ、2人が招待されます）
+
+| ボタン | 動作 |
+|---|---|
+| 🏳️ 負けを報告 | **負けた人が**押す。スコアが進み、勝った人がBANする番になる |
+| 🚫 BANするカードを選ぶ | 勝った人が、相手のカードから規定枚数を選ぶ（BAN済み・最初から使用不可のカードは出てこない）。BANが済むまで次の報告はできない |
+| 📅 日程を提案 | 日時を提案する。相手が「👍 この日程でOK」を押すと確定し、30分前と開始時刻にスレッドでお知らせ |
+| 📋 BAN状況 | スコアと、それぞれが使えなくなったカードの一覧 |
+| ↩️ 直前の1戦を取り消す | 押し間違えたとき。本人は相手のBAN選択前まで、管理者はいつでも（その戦のBANも取り消す） |
+| 🛑 中止（管理者） | 対戦を中止する |
+
+スレッド先頭のピン留めメッセージに、スコアとBAN済みカードが常に最新の状態で表示されます。
+
+**カード一覧の取り込み**: BANの候補になるカードは `/cardban_import` でJSONかCSVのファイルから取り込みます（毎回全件入れ替え）。`/cardban_export` で現在の一覧（未登録なら全キャラ分の空のひな形）をJSONで受け取れるので、編集して取り込み直せます。CSVの場合は次の形です（区分は `system` / `skill` / `spell`、キャラ名は `/report` などと同じ表記）。
+
+```csv
+区分,キャラ,カード名,コスト
+system,,カード名,1
+skill,博麗霊夢,カード名,
+spell,博麗霊夢,霊符「夢想封印」,2
+```
+
+`/cardban_cards` でキャラごと（省略時はシステムカード）の登録内容を確認できます。
+
+**管理者用**: `/setup_cardban_panel`、`/cardban_import`、`/cardban_export`、`/cardban_preban`（最初から使用不可にするカードの追加・解除）、`/cardban_config`（先取数・BAN枚数。引数なしで現在の設定を表示）
+
 ## 交流・投稿
 
 ### メインキャラ登録と分布
@@ -378,6 +425,7 @@
 | お便り | `/setup_letter_panel` `/tegami_check` `/tegami_reply` `/tegami_hide` `/tegami_unhide` |
 | カレンダー | `/calendar_setup` `/setup_event_panel` |
 | 天則 HOT TIME | `/hot_time_setup` `/hot_time_panel` `/hot_time_post` `/hot_time_stop` |
+| カードBAN10先 | `/setup_cardban_panel` `/cardban_import` `/cardban_export` `/cardban_preban` `/cardban_config` |
 | その他 | `/setup_thread_index` `/remove_thread_index` `/pizza_panel` |
 
 ---
@@ -458,6 +506,7 @@ tensoku_info_bot/
 │   ├── raid_battle_cog.py    # SOKKUMAN
 │   ├── territory_cog.py      # 陣取り戦
 │   ├── hot_time_cog.py       # 天則 HOT TIME
+│   ├── cardban_cog.py        # カードBAN10先
 │   ├── main_char_cog.py      # メインキャラ登録・分布
 │   ├── forum_article_cog.py  # 記事投稿（フォーラム）
 │   ├── post_cog.py           # 簡易投稿・Embedビルダー
@@ -476,6 +525,7 @@ tensoku_info_bot/
 │   └── server.py             # 陣取りマップの配信オーバーレイ
 ├── rating_ranks.py           # ランク（全9段階）の定義
 ├── rank_roles.py             # ランクロールの作成・付与
+├── cardban_cards.py          # カードBAN用カード一覧の読み込み（JSON/CSV）
 ├── config.py                 # 環境設定の読み込み
 ├── main.py                   # エントリーポイント
 ├── Procfile                  # Railway 用

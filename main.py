@@ -38,6 +38,7 @@ COGS = [
     "cogs.event_reminder_cog",
     "cogs.mvp_cog",
     "cogs.hot_time_cog",
+    "cogs.cardban_cog",
     "cogs.promote_cog",
     "cogs.backup_cog",
 ]

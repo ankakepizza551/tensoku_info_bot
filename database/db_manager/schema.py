@@ -592,3 +592,91 @@ async def init_db():
             )
         """)
         await db.commit()
+
+        # カードBAN10先: カード一覧（ゲームのデータなのでギルド共通。/cardban_import で取り込む）
+        # card_key は「区分|キャラ|カード名」。取り込み直しても同じカードは同じキーになる
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS cardban_cards (
+                card_key TEXT PRIMARY KEY,
+                category TEXT NOT NULL,          -- system / skill / spell
+                character TEXT NOT NULL DEFAULT '',  -- システムカードは空文字
+                name TEXT NOT NULL,
+                cost INTEGER,
+                sort_order INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        # カードBAN10先: ギルドごとの設定（パネル・先取数・1戦あたりのBAN枚数・最初から抜くカード）
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS cardban_settings (
+                guild_id INTEGER PRIMARY KEY,
+                panel_channel_id INTEGER,
+                panel_message_id INTEGER,
+                target_wins INTEGER NOT NULL DEFAULT 10,
+                bans_per_game INTEGER NOT NULL DEFAULT 1,
+                preban TEXT NOT NULL DEFAULT '[]'  -- card_key のJSON配列
+            )
+        """)
+        # カードBAN10先: 対戦待ち（エントリー）。キャラ変更なしの企画なので、エントリー時にキャラを決める
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS cardban_entries (
+                guild_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                character TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (guild_id, user_id)
+            )
+        """)
+        # カードBAN10先: 対戦（1対戦 = 1スレッド）
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS cardban_matches (
+                match_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id INTEGER NOT NULL,
+                thread_id INTEGER UNIQUE,
+                player1_id INTEGER NOT NULL,
+                player2_id INTEGER NOT NULL,
+                char1 TEXT NOT NULL,
+                char2 TEXT NOT NULL,
+                score1 INTEGER NOT NULL DEFAULT 0,
+                score2 INTEGER NOT NULL DEFAULT 0,
+                target_wins INTEGER NOT NULL,
+                bans_per_game INTEGER NOT NULL,
+                preban TEXT NOT NULL DEFAULT '[]',
+                status TEXT NOT NULL,            -- pending_accept / active / finished / cancelled
+                pending_ban_by INTEGER,          -- BANを選ぶ番の人（直前の勝者）
+                status_message_id INTEGER,
+                proposed_at TEXT,                -- 日程の提案（JST 'YYYY-MM-DD HH:MM'）
+                proposed_by INTEGER,
+                scheduled_at TEXT,               -- 確定した日程（JST 'YYYY-MM-DD HH:MM'）
+                reminded_before INTEGER NOT NULL DEFAULT 0,
+                reminded_start INTEGER NOT NULL DEFAULT 0,
+                winner_id INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                finished_at TIMESTAMP
+            )
+        """)
+        # カードBAN10先: 1戦ごとの勝敗
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS cardban_games (
+                game_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                match_id INTEGER NOT NULL,
+                game_no INTEGER NOT NULL,
+                winner_id INTEGER NOT NULL,
+                loser_id INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        # カードBAN10先: BANされたカード（カード名は取り込み直しに備えて控えておく）
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS cardban_bans (
+                ban_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                match_id INTEGER NOT NULL,
+                game_id INTEGER NOT NULL,
+                banned_by INTEGER NOT NULL,
+                target_id INTEGER NOT NULL,
+                card_key TEXT NOT NULL,
+                category TEXT NOT NULL,
+                card_name TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await db.commit()
