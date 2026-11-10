@@ -1,6 +1,6 @@
 """カードBAN10先
 
-先に規定数（既定10）勝った方が勝ち。1戦ごとに、勝った方が負けた方のカードを規定枚数（既定2枚）使用不可にする。
+先に規定数（既定10）勝った方が勝ち。1戦ごとに、勝った方が負けた方のカードを規定枚数（既定1枚）使用不可にする。
 キャラ変更はなし。BANはスペル・スキル・システムカードすべてが対象で、喜怒哀楽すべてのデッキから取り除く。
 
 流れ
@@ -1113,7 +1113,7 @@ class CardBanCog(commands.Cog):
         return await self._card_autocomplete(interaction, current)
 
     @app_commands.command(name="cardban_config", description="先取数と1戦あたりのBAN枚数を設定します（管理者用・次の対戦から反映）")
-    @app_commands.describe(target_wins="何勝先取か（既定10）", bans_per_game="1戦ごとにBANする枚数（既定2）")
+    @app_commands.describe(target_wins="何勝先取か（既定10）", bans_per_game="1戦ごとにBANする枚数（既定1）")
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.guild_only()
     async def cardban_config(

@@ -86,7 +86,7 @@ async def count_cardban_cards() -> dict:
 # ── 設定 ─────────────────────────────────────
 
 async def get_cardban_settings(guild_id: int) -> dict:
-    """未設定でも既定値（10先・1戦2枚・最初から抜くカードなし）を返す"""
+    """未設定でも既定値（10先・1戦1枚・最初から抜くカードなし）を返す"""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
@@ -98,7 +98,7 @@ async def get_cardban_settings(guild_id: int) -> dict:
         "panel_channel_id": None,
         "panel_message_id": None,
         "target_wins": 10,
-        "bans_per_game": 2,
+        "bans_per_game": 1,
         "preban": "[]",
     }
     settings["preban"] = json.loads(settings["preban"] or "[]")

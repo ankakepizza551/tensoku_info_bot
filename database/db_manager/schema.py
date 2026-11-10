@@ -612,7 +612,7 @@ async def init_db():
                 panel_channel_id INTEGER,
                 panel_message_id INTEGER,
                 target_wins INTEGER NOT NULL DEFAULT 10,
-                bans_per_game INTEGER NOT NULL DEFAULT 2,
+                bans_per_game INTEGER NOT NULL DEFAULT 1,
                 preban TEXT NOT NULL DEFAULT '[]'  -- card_key のJSON配列
             )
         """)
