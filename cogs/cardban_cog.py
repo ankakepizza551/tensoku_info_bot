@@ -18,9 +18,12 @@ from discord.ext import commands, tasks
 
 from cardban_cards import (
     CATEGORY_LABELS,
+    INITIAL_SKILL_MARK,
+    INITIAL_SKILL_RULE,
     CardImportError,
     card_label,
     cards_to_json,
+    is_initial_skill_key,
     parse_cards,
 )
 from cogs.report_cog import CHARACTERS
@@ -148,7 +151,8 @@ async def _build_panel_embed(guild: discord.Guild) -> discord.Embed:
             f"先に **{settings['target_wins']}勝** した方の勝ち！\n"
             f"1戦ごとに、負けた方が勝った方のカードを **{settings['bans_per_game']}枚** 使用不可にします。\n"
             "・スペル・スキル・システムカードすべてが対象（喜怒哀楽すべてのデッキから抜く）\n"
-            "・キャラ変更はなし（エントリー時に決めたキャラで最後まで）\n\n"
+            "・キャラ変更はなし（エントリー時に決めたキャラで最後まで）\n"
+            f"・{INITIAL_SKILL_RULE}\n\n"
             "**参加方法**: 「エントリー」でキャラを決める → 「自動マッチング」か「相手を指名」"
         ),
         color=COLOR,
@@ -209,6 +213,7 @@ async def _build_status_embed(guild: discord.Guild, match: dict) -> discord.Embe
             name=f"🚫 {_name(guild, player)} が使えないカード（{len(player_bans)}枚）",
             value=_clip([
                 f"第{b['game_no']}戦: [{CATEGORY_LABELS.get(b['category'], b['category'])}] {b['card_name']}"
+                + (f" {INITIAL_SKILL_MARK}" if is_initial_skill_key(b["card_key"]) else "")
                 for b in player_bans
             ]),
             inline=False,
@@ -409,7 +414,10 @@ class BanSelectView(discord.ui.View):
                     discord.SelectOption(
                         label=card_label(c)[:100],
                         value=c["card_key"],
-                        description=CATEGORY_LABELS[c["category"]] + (f" / {c['character']}" if c["character"] else ""),
+                        description=(
+                            CATEGORY_LABELS[c["category"]] + (f" / {c['character']}" if c["character"] else "")
+                            + (f" {INITIAL_SKILL_MARK}" if is_initial_skill_key(c["card_key"]) else "")
+                        )[:100],
                     )
                     for c in group
                 ],
@@ -791,10 +799,17 @@ class CardBanCog(commands.Cog):
 
         match = await db_manager.get_cardban_match(view.match_id)
         target_id = _opponent_of(match, view.banner_id)
-        lines = [f"・[{CATEGORY_LABELS[c['category']]}] {c['name']}" for c in cards]
+        lines = [
+            f"・[{CATEGORY_LABELS[c['category']]}] {c['name']}"
+            + (f" {INITIAL_SKILL_MARK}" if is_initial_skill_key(c["card_key"]) else "")
+            for c in cards
+        ]
+        note = ""
+        if any(is_initial_skill_key(c["card_key"]) for c in cards):
+            note = f"\n⚠️ {INITIAL_SKILL_RULE}"
         await interaction.channel.send(
             f"🚫 <@{view.banner_id}> が <@{target_id}> のカードをBANしました。\n" + "\n".join(lines)
-            + f"\n<@{target_id}> は喜怒哀楽すべてのデッキからこのカードを抜いてください。次の対戦へどうぞ！"
+            + f"\n<@{target_id}> は喜怒哀楽すべてのデッキからこのカードを抜いてください。次の対戦へどうぞ！" + note
         )
         await self._refresh_status(interaction.guild, view.match_id)
         logger.info(f"cardban_ban: match={view.match_id} by={view.banner_id} cards={[c['card_key'] for c in cards]}")
@@ -1074,7 +1089,9 @@ class CardBanCog(commands.Cog):
                 embed.add_field(
                     name=f"{CATEGORY_LABELS[category]}（{len(group)}枚）",
                     value=_clip([
-                        f"・{card_label(c)}" + (" 🚷最初から使用不可" if c["card_key"] in settings["preban"] else "")
+                        f"・{card_label(c)}"
+                        + (" ⚠️初期スキル" if is_initial_skill_key(c["card_key"]) else "")
+                        + (" 🚷最初から使用不可" if c["card_key"] in settings["preban"] else "")
                         for c in group
                     ]),
                     inline=False,
