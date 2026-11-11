@@ -1,12 +1,12 @@
 """カードBAN10先
 
-先に規定数（既定10）勝った方が勝ち。1戦ごとに、勝った方が負けた方のカードを規定枚数（既定1枚）使用不可にする。
+先に規定数（既定10）勝った方が勝ち。1戦ごとに、負けた方が勝った方のカードを規定枚数（既定1枚）使用不可にする。
 キャラ変更はなし。BANはスペル・スキル・システムカードすべてが対象で、喜怒哀楽すべてのデッキから取り除く。
 
 流れ
 1. パネルの「エントリー」でキャラを決めて対戦待ちに入る
 2. 「自動マッチング」で待機中の相手と組むか、「相手を指名」で申し込む（相手が承諾したら成立）
-3. 対戦ごとにスレッドが作られ、日程調整（提案→相手がOK）、負けの報告、勝者のBAN選択をスレッド内で行う
+3. 対戦ごとにスレッドが作られ、日程調整（提案→相手がOK）、負けの報告、敗者のBAN選択をスレッド内で行う
 """
 import datetime
 import io
@@ -108,12 +108,12 @@ def _clip(lines: list[str], limit: int = 1024) -> str:
     return text or "なし"
 
 
-async def _ban_candidates(match: dict, loser_id: int) -> list[dict]:
-    """敗者のキャラのスキル・スペルとシステムカードのうち、最初から除外したものとBAN済みを除いたもの"""
-    cards = await db_manager.get_cardban_cards(_char_of(match, loser_id))
+async def _ban_candidates(match: dict, target_id: int) -> list[dict]:
+    """BANされる側（直前の勝者）のキャラのスキル・スペルとシステムカードのうち、最初から除外したものとBAN済みを除いたもの"""
+    cards = await db_manager.get_cardban_cards(_char_of(match, target_id))
     excluded = set(match["preban"])
     excluded.update(b["card_key"] for b in await db_manager.get_cardban_bans(match["match_id"])
-                    if b["target_id"] == loser_id)
+                    if b["target_id"] == target_id)
     order = {"skill": 0, "spell": 1, "system": 2}
     available = [c for c in cards if c["card_key"] not in excluded]
     available.sort(key=lambda c: order[c["category"]])  # sort は安定なので取り込み順は保たれる
@@ -146,7 +146,7 @@ async def _build_panel_embed(guild: discord.Guild) -> discord.Embed:
         title=f"🃏 カードBAN{settings['target_wins']}先",
         description=(
             f"先に **{settings['target_wins']}勝** した方の勝ち！\n"
-            f"1戦ごとに、勝った方が負けた方のカードを **{settings['bans_per_game']}枚** 使用不可にします。\n"
+            f"1戦ごとに、負けた方が勝った方のカードを **{settings['bans_per_game']}枚** 使用不可にします。\n"
             "・スペル・スキル・システムカードすべてが対象（喜怒哀楽すべてのデッキから抜く）\n"
             "・キャラ変更はなし（エントリー時に決めたキャラで最後まで）\n\n"
             "**参加方法**: 「エントリー」でキャラを決める → 「自動マッチング」か「相手を指名」"
@@ -219,7 +219,7 @@ async def _build_status_embed(guild: discord.Guild, match: dict) -> discord.Embe
             value=_clip([f"・{_preban_name(k)}" for k in match["preban"]]),
             inline=False,
         )
-    embed.set_footer(text=f"1戦ごとに勝者が敗者のカードを{match['bans_per_game']}枚BAN ・ 対戦ID {match['match_id']}")
+    embed.set_footer(text=f"1戦ごとに敗者が勝者のカードを{match['bans_per_game']}枚BAN ・ 対戦ID {match['match_id']}")
     return embed
 
 
@@ -380,13 +380,13 @@ class ScheduleModal(discord.ui.Modal, title="📅 対戦日時を提案"):
 
 
 class BanSelectView(discord.ui.View):
-    """勝者だけに見えるBAN選択。カードが多いので区分ごとに最大25枚ずつのセレクトに分ける"""
+    """BANする人（直前の敗者）だけに見えるBAN選択。カードが多いので区分ごとに最大25枚ずつのセレクトに分ける"""
 
-    def __init__(self, cog: "CardBanCog", match: dict, winner_id: int, candidates: list[dict], ban_count: int):
+    def __init__(self, cog: "CardBanCog", match: dict, banner_id: int, candidates: list[dict], ban_count: int):
         super().__init__(timeout=600)
         self.cog = cog
         self.match_id = match["match_id"]
-        self.winner_id = winner_id
+        self.banner_id = banner_id
         self.ban_count = ban_count
         self.cards = {c["card_key"]: c for c in candidates}
         self.selected: dict[int, list[str]] = {}
@@ -656,7 +656,7 @@ class CardBanCog(commands.Cog):
             f"<@{match['player1_id']}> <@{match['player2_id']}> 対戦成立です！\n"
             "1. 「📅 日程を提案」で日時を決めましょう（相手がOKすると確定し、30分前と開始時刻にお知らせします）\n"
             "2. 1戦ごとに、**負けた人が**「🏳️ 負けを報告」を押してください\n"
-            "3. 勝った人は「🚫 BANするカードを選ぶ」で相手のカードをBANします（BANが済むまで次の報告はできません）"
+            "3. 続けて負けた人が「🚫 BANするカードを選ぶ」で、勝った人のカードをBANします（BANが済むまで次の報告はできません）"
         )
 
     # ── 申し込みへの返事 ───────────────────────
@@ -732,18 +732,18 @@ class CardBanCog(commands.Cog):
                 f"<@{winner_id}> が **カードBAN{match['target_wins']}先** を制しました！お疲れさまでした！"
             )
         else:
-            candidates = await _ban_candidates(match, loser_id)
+            candidates = await _ban_candidates(match, winner_id)
             ban_count = min(match["bans_per_game"], len(candidates))
             if ban_count == 0:
-                await db_manager.apply_cardban_bans(match["match_id"], winner_id, [])
+                await db_manager.apply_cardban_bans(match["match_id"], loser_id, [])
                 await interaction.channel.send(
                     f"⚔️ 第{result['game_no']}戦は <@{winner_id}> の勝利（{score}）。\n"
-                    f"<@{loser_id}> にはBANできるカードが残っていないため、BANなしで次の対戦へ進みます。"
+                    f"<@{winner_id}> にはBANできるカードが残っていないため、BANなしで次の対戦へ進みます。"
                 )
             else:
                 await interaction.channel.send(
                     f"⚔️ 第{result['game_no']}戦は <@{winner_id}> の勝利（{score}）。\n"
-                    f"<@{winner_id}> は <@{loser_id}>（{_char_of(match, loser_id)}）のカードを "
+                    f"<@{loser_id}> は <@{winner_id}>（{_char_of(match, winner_id)}）のカードを "
                     f"**{ban_count}枚** BANしてください。",
                     view=BanPromptView(self),
                 )
@@ -760,11 +760,11 @@ class CardBanCog(commands.Cog):
             return
         if interaction.user.id != match["pending_ban_by"]:
             await interaction.response.send_message(
-                f"❌ BANを選ぶのは直前の勝者（<@{match['pending_ban_by']}>）です。", ephemeral=True
+                f"❌ BANを選ぶのは直前に負けた人（<@{match['pending_ban_by']}>）です。", ephemeral=True
             )
             return
-        loser_id = _opponent_of(match, interaction.user.id)
-        candidates = await _ban_candidates(match, loser_id)
+        target_id = _opponent_of(match, interaction.user.id)
+        candidates = await _ban_candidates(match, target_id)
         ban_count = min(match["bans_per_game"], len(candidates))
         if ban_count == 0:
             await db_manager.apply_cardban_bans(match["match_id"], interaction.user.id, [])
@@ -772,14 +772,14 @@ class CardBanCog(commands.Cog):
             await self._refresh_status(interaction.guild, match["match_id"])
             return
         await interaction.response.send_message(
-            f"<@{loser_id}>（{_char_of(match, loser_id)}）のカードから **{ban_count}枚** 選んで、最後に下のボタンを押してください。\n"
+            f"<@{target_id}>（{_char_of(match, target_id)}）のカードから **{ban_count}枚** 選んで、最後に下のボタンを押してください。\n"
             "（BAN済み・最初から使用不可のカードは出てきません）",
             view=BanSelectView(self, match, interaction.user.id, candidates, ban_count),
             ephemeral=True,
         )
 
     async def _handle_confirm_ban(self, interaction: discord.Interaction, view: BanSelectView, cards: list[dict]):
-        ok = await db_manager.apply_cardban_bans(view.match_id, view.winner_id, cards)
+        ok = await db_manager.apply_cardban_bans(view.match_id, view.banner_id, cards)
         if not ok:
             await interaction.response.edit_message(
                 content="❌ BANできませんでした（もう選び終わっているか、記録が取り消されています）。", view=None
@@ -790,14 +790,14 @@ class CardBanCog(commands.Cog):
         await interaction.response.edit_message(content=f"✅ {names} をBANしました。", view=None)
 
         match = await db_manager.get_cardban_match(view.match_id)
-        loser_id = _opponent_of(match, view.winner_id)
+        target_id = _opponent_of(match, view.banner_id)
         lines = [f"・[{CATEGORY_LABELS[c['category']]}] {c['name']}" for c in cards]
         await interaction.channel.send(
-            f"🚫 <@{view.winner_id}> が <@{loser_id}> のカードをBANしました。\n" + "\n".join(lines)
-            + f"\n<@{loser_id}> は喜怒哀楽すべてのデッキからこのカードを抜いてください。次の対戦へどうぞ！"
+            f"🚫 <@{view.banner_id}> が <@{target_id}> のカードをBANしました。\n" + "\n".join(lines)
+            + f"\n<@{target_id}> は喜怒哀楽すべてのデッキからこのカードを抜いてください。次の対戦へどうぞ！"
         )
         await self._refresh_status(interaction.guild, view.match_id)
-        logger.info(f"cardban_ban: match={view.match_id} by={view.winner_id} cards={[c['card_key'] for c in cards]}")
+        logger.info(f"cardban_ban: match={view.match_id} by={view.banner_id} cards={[c['card_key'] for c in cards]}")
 
     async def _handle_show_status(self, interaction: discord.Interaction):
         match = await self._match_here(interaction)
@@ -815,10 +815,10 @@ class CardBanCog(commands.Cog):
             return
         last = games[-1]
         if not _is_admin(interaction.user):
-            # 管理者以外は、報告した本人（負けた人）が、勝者のBAN選択前に限って取り消せる
+            # 管理者以外は、報告した本人（負けた人）が、自分のBAN選択前に限って取り消せる
             if interaction.user.id != last["loser_id"] or match["pending_ban_by"] is None or match["status"] != "active":
                 await interaction.response.send_message(
-                    "❌ 取り消せるのは「負けを報告した本人が、相手のBAN選択前に」押したときだけです。"
+                    "❌ 取り消せるのは「負けを報告した本人が、BANを選ぶ前に」押したときだけです。"
                     "それ以外は管理者に依頼してください。",
                     ephemeral=True,
                 )

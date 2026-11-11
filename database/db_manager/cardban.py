@@ -1,4 +1,4 @@
-"""カードBAN10先（先に規定数勝った方が勝ち。1戦ごとに勝者が敗者のカードを使用不可にする企画）"""
+"""カードBAN10先（先に規定数勝った方が勝ち。1戦ごとに敗者が勝者のカードを使用不可にする企画）"""
 import json
 
 import aiosqlite
@@ -281,7 +281,7 @@ async def record_cardban_loss(match_id: int, loser_id: int) -> dict | None:
 
     BAN待ちが残っている・進行中でないなどで記録できなければ None。
     記録できたら {'game_id', 'game_no', 'winner_id', 'finished'} を返す。
-    先取数に届いたら対戦を終了にし、届かなければ勝者をBAN待ちにする。
+    先取数に届いたら対戦を終了にし、届かなければ敗者をBAN待ちにする（敗者が勝者のカードをBANする）。
     """
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
@@ -323,16 +323,16 @@ async def record_cardban_loss(match_id: int, loser_id: int) -> dict | None:
         else:
             await db.execute(
                 "UPDATE cardban_matches SET score1 = ?, score2 = ?, pending_ban_by = ? WHERE match_id = ?",
-                (score1, score2, winner_id, match_id),
+                (score1, score2, loser_id, match_id),
             )
         await db.commit()
         return {"game_id": game_id, "game_no": game_no, "winner_id": winner_id, "finished": finished}
 
 
 async def apply_cardban_bans(match_id: int, banned_by: int, cards: list[dict]) -> bool:
-    """BAN待ちの勝者が選んだカードを記録し、BAN待ちを解除する。
+    """BAN待ちの人（直前の敗者）が選んだ相手のカードを記録し、BAN待ちを解除する。
 
-    cards が空ならBANなし（敗者に抜けるカードが残っていないとき）で解除だけする。
+    cards が空ならBANなし（相手に抜けるカードが残っていないとき）で解除だけする。
     もう解除済み・BANする番の人ではない・選んだカードが既にBAN済みなら False。
     """
     async with aiosqlite.connect(DB_PATH) as db:
